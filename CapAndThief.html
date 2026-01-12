@@ -1,0 +1,1309 @@
+﻿<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>경찰 과 도둑: Final Speed Balance</title>
+    <style>
+        body {
+            margin: 0;
+            height: 100vh;
+            background-color: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Malgun Gothic', sans-serif;
+            overflow: hidden;
+        }
+
+        canvas {
+            background-color: #111;
+            border: 4px solid #333;
+            box-shadow: 0 0 40px rgba(0, 100, 255, 0.15);
+            image-rendering: pixelated;
+            max-width: 100%;
+            max-height: 100%;
+            outline: none;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas" width="800" height="600" tabindex="0"></canvas>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        canvas.focus();
+
+        const maskCanvas = document.createElement('canvas');
+        maskCanvas.width = canvas.width;
+        maskCanvas.height = canvas.height;
+        const maskCtx = maskCanvas.getContext('2d');
+
+        // --- 게임 상태 ---
+        const gameState = {
+            screen: 'start',
+            isPaused: false,
+            score: 0,
+            arrests: 0,
+            prisoners: 0,
+            startTime: 0,
+            pauseStartTime: 0,
+            totalPausedTime: 0,
+            intelObtained: false,
+            messages: [],
+            globalTimer: 0,
+            isHoveringBtn: false,
+            isHoveringMenuBtn: false,
+            wasInStation: false,
+            itemSpawnTimer: 0,
+            freezeActiveTime: 0,
+            maxFreezeTime: 600,
+            slowAuraActiveTime: 0,
+            maxSlowAuraTime: 1800
+        };
+
+        // --- 1. 설정 ---
+        const worldState = { x: 1, y: 1 };
+        const mapConfig = { rows: 4, cols: 5, bWidth: 100, bHeight: 80, gap: 50, startX: 0, startY: 0 };
+
+        const player = {
+            x: 0, y: 0, size: 24,
+            speed: 2.5, baseSpeed: 2.5,
+            sprintSpeed: 4.5,
+            currentDisplaySpeed: 0,
+            color: '#003366',
+            rotation: -Math.PI / 2,
+            viewDistance: 260, fov: Math.PI / 2.0, ambientRadius: 70,
+            stamina: 100, maxStamina: 100
+        };
+
+        let robbers = [];
+        let items = [];
+        const MAX_ROBBERS = 30;
+        const MAX_CENTER_ROBBERS = 5;
+
+        class Robber {
+            constructor(wx, wy, spawnX, spawnY) {
+                const elapsedMins = (Date.now() - gameState.startTime) / 60000;
+                // 난이도 계수 (시간 + 검거수)
+                const difficulty = (elapsedMins * 0.05) + (gameState.arrests * 0.02);
+
+                this.active = true;
+                this.worldX = wx; this.worldY = wy;
+                this.x = spawnX; this.y = spawnY;
+                this.size = 20;
+
+                // [수정] 속도 로직 변경
+                // 기본 속도: 난이도에 따라 계속 상승
+                this.baseSpeed = 1.0 + difficulty;
+
+                // 도주 속도: 기본 속도 + 1.5 (고정된 추가 속도)
+                // 너무 빨라져서 물리 엔진 뚫는 것 방지 위해 최대 5.0으로 제한
+                this.sprintSpeed = Math.min(5.0, this.baseSpeed + 1.5);
+
+                this.speed = this.baseSpeed;
+                this.color = '#c0392b';
+                this.path = [];
+                this.targetNode = null;
+                this.roamTarget = null;
+                this.lastExitTime = 0;
+                this.stuckTimer = 0;
+                this.offScreenTimer = 0;
+                this.stamina = 100;
+                this.state = 'ROAM';
+            }
+        }
+
+        class Item {
+            constructor(wx, wy, x, y, type) {
+                this.worldX = wx;
+                this.worldY = wy;
+                this.x = x;
+                this.y = y;
+                this.type = type;
+                this.size = 15;
+                this.bounceOffset = 0;
+                if (type === 'FREEZE') this.color = '#00FFFF';
+                else if (type === 'SLOW_AURA') this.color = '#FFA500';
+            }
+        }
+
+        const spawner = {
+            nextSpawnTime: 0,
+            interval: 15000,
+            targetWX: 1,
+            targetWY: 1,
+            targetBuildingIdx: 0
+        };
+
+        const keys = { w: false, a: false, s: false, d: false, shift: false };
+        let buildings = [];
+        let policeStation = null;
+        let roadNodes = [];
+        const buildingColors = ['#8d6e63', '#78909c', '#a1887f', '#546e7a', '#6d4c41'];
+
+        function getMousePos(evt) {
+            const rect = canvas.getBoundingClientRect();
+            const scaleX = canvas.width / rect.width;
+            const scaleY = canvas.height / rect.height;
+            return {
+                x: (evt.clientX - rect.left) * scaleX,
+                y: (evt.clientY - rect.top) * scaleY
+            };
+        }
+
+        function getCurrentGameTime() {
+            let refTime = Date.now();
+            if (gameState.isPaused) {
+                refTime = gameState.pauseStartTime;
+            }
+            return refTime - gameState.totalPausedTime;
+        }
+
+        function showGameMessage(text, color, time) {
+            gameState.messages.push({
+                text: text,
+                color: color,
+                life: time,
+                maxLife: time
+            });
+            if (gameState.messages.length > 5) gameState.messages.shift();
+        }
+
+        function getRobberCountInStage(wx, wy) {
+            return robbers.filter(r => r.worldX === wx && r.worldY === wy).length;
+        }
+
+        function initGame() {
+            gameState.score = 0;
+            gameState.arrests = 0;
+            gameState.prisoners = 0;
+            gameState.startTime = Date.now();
+            gameState.totalPausedTime = 0;
+            gameState.intelObtained = false;
+            gameState.isPaused = false;
+            gameState.messages = [];
+            gameState.wasInStation = false;
+            gameState.itemSpawnTimer = 0;
+            gameState.freezeActiveTime = 0;
+            gameState.slowAuraActiveTime = 0;
+
+            player.stamina = player.maxStamina;
+            robbers = [];
+            items = [];
+
+            spawner.interval = 15000;
+
+            pickNewTarget();
+            createCity('init');
+            isGameActive = true;
+            gameState.screen = 'playing';
+        }
+
+        function pickNewTarget() {
+            const reductionSec = Math.floor(gameState.score / 100);
+            let newIntervalSec = 10 - reductionSec;
+            if (newIntervalSec < 1) newIntervalSec = 1;
+
+            spawner.interval = newIntervalSec * 1000;
+            spawner.nextSpawnTime = getCurrentGameTime() + spawner.interval;
+
+            spawner.targetWX = Math.floor(Math.random() * 3);
+            spawner.targetWY = Math.floor(Math.random() * 3);
+            spawner.targetBuildingIdx = Math.floor(Math.random() * 20);
+
+            gameState.intelObtained = false;
+
+            showGameMessage("⚠️ 범죄 모의 포착! " + newIntervalSec + "초 후 침입 발생!", "yellow", 240);
+        }
+
+        function spawnRandomItem() {
+            const wx = Math.floor(Math.random() * 3);
+            const wy = Math.floor(Math.random() * 3);
+            let ix, iy;
+
+            if (Math.random() > 0.5) {
+                const r = Math.floor(Math.random() * (mapConfig.rows + 1));
+                const randX = Math.random() * canvas.width;
+                ix = randX;
+                iy = mapConfig.startY - (mapConfig.gap / 2) + r * (mapConfig.bHeight + mapConfig.gap);
+            } else {
+                const c = Math.floor(Math.random() * (mapConfig.cols + 1));
+                const randY = Math.random() * canvas.height;
+                ix = mapConfig.startX - (mapConfig.gap / 2) + c * (mapConfig.bWidth + mapConfig.gap);
+                iy = randY;
+            }
+
+            ix = Math.max(20, Math.min(canvas.width - 20, ix));
+            iy = Math.max(20, Math.min(canvas.height - 20, iy));
+
+            const type = Math.random() > 0.5 ? 'FREEZE' : 'SLOW_AURA';
+            items.push(new Item(wx, wy, ix, iy, type));
+            showGameMessage("🎁 지원 물자 투하 확인!", "#FFFFFF", 180);
+        }
+
+        function spawnRobber() {
+            let spawnX = 0, spawnY = 0;
+
+            if (spawner.targetWX === 1 && spawner.targetWY === 1) {
+                if (getRobberCountInStage(1, 1) >= MAX_CENTER_ROBBERS) {
+                    let safeWX, safeWY;
+                    do {
+                        safeWX = Math.floor(Math.random() * 3);
+                        safeWY = Math.floor(Math.random() * 3);
+                    } while (safeWX === 1 && safeWY === 1);
+
+                    spawner.targetWX = safeWX;
+                    spawner.targetWY = safeWY;
+                    spawner.targetBuildingIdx = Math.floor(Math.random() * 20);
+                }
+            }
+
+            if (worldState.x === spawner.targetWX && worldState.y === spawner.targetWY) {
+                const b = buildings[spawner.targetBuildingIdx] || buildings[0];
+                if (b) { spawnX = b.x + b.w / 2 - 10; spawnY = b.y + b.h + 10; }
+
+                if (worldState.x === 1 && worldState.y === 1 && policeStation) {
+                    const ps = policeStation;
+                    if (spawnX > ps.x - 20 && spawnX < ps.x + ps.w + 20 &&
+                        spawnY > ps.y - 20 && spawnY < ps.y + ps.h + 20) {
+
+                        const safeNode = roadNodes[0];
+                        if (safeNode) { spawnX = safeNode.x; spawnY = safeNode.y; }
+                        else { spawnX = 20; spawnY = 20; }
+                    }
+                }
+            } else {
+                spawnX = canvas.width / 2;
+                spawnY = canvas.height / 2;
+            }
+
+            const r = new Robber(spawner.targetWX, spawner.targetWY, spawnX, spawnY);
+            r.stuckTimer = 20;
+            robbers.push(r);
+            showGameMessage("🚨 침입 발생! 용의자 도주 중!", "red", 240);
+
+            pickNewTarget();
+        }
+
+        function createCity(enterFrom = null) {
+            buildings = [];
+            policeStation = null;
+
+            const totalW = (mapConfig.cols * mapConfig.bWidth) + ((mapConfig.cols - 1) * mapConfig.gap);
+            const totalH = (mapConfig.rows * mapConfig.bHeight) + ((mapConfig.rows - 1) * mapConfig.gap);
+            mapConfig.startX = (canvas.width - totalW) / 2;
+            mapConfig.startY = (canvas.height - totalH) / 2;
+
+            const isCenterMap = (worldState.x === 1 && worldState.y === 1);
+
+            for (let r = 0; r < mapConfig.rows; r++) {
+                for (let c = 0; c < mapConfig.cols; c++) {
+                    if (isCenterMap && (r === 1 || r === 2) && c === 2) continue;
+                    const bx = mapConfig.startX + c * (mapConfig.bWidth + mapConfig.gap);
+                    const by = mapConfig.startY + r * (mapConfig.bHeight + mapConfig.gap);
+                    const seed = (worldState.x * 100) + (worldState.y * 10) + (r * 5) + c;
+                    const color = buildingColors[seed % buildingColors.length];
+                    buildings.push({ x: bx, y: by, w: mapConfig.bWidth, h: mapConfig.bHeight, color: color, floors: (seed % 3) + 2 });
+                }
+            }
+
+            if (isCenterMap) {
+                const stationW = 72; const stationH = 54;
+                policeStation = { x: canvas.width / 2 - stationW / 2, y: canvas.height / 2 - stationH / 2, w: stationW, h: stationH };
+            }
+
+            if (enterFrom === 'left') player.x = canvas.width - player.size - 20;
+            else if (enterFrom === 'right') player.x = 20;
+            else if (enterFrom === 'up') player.y = canvas.height - player.size - 20;
+            else if (enterFrom === 'down') player.y = 20;
+            else if (enterFrom === 'init') { player.x = canvas.width / 2; player.y = canvas.height / 2 + 80; }
+
+            createRoadGraph();
+            ensurePlayerSafety();
+            syncRobbersPosition();
+        }
+
+        function ensurePlayerSafety() {
+            if (checkCollision(player, player.x, player.y)) {
+                const safeNode = getNearestNode(player.x, player.y);
+                if (safeNode) { player.x = safeNode.x; player.y = safeNode.y; }
+            }
+        }
+
+        function createRoadGraph() {
+            roadNodes = [];
+            const cols = mapConfig.cols + 1;
+            const rows = mapConfig.rows + 1;
+            for (let r = 0; r < rows; r++) {
+                for (let c = 0; c < cols; c++) {
+                    let nx = mapConfig.startX - (mapConfig.gap / 2) + c * (mapConfig.bWidth + mapConfig.gap);
+                    let ny = mapConfig.startY - (mapConfig.gap / 2) + r * (mapConfig.bHeight + mapConfig.gap);
+                    if (nx < 20) nx = 20; if (nx > canvas.width - 20) nx = canvas.width - 20;
+                    if (ny < 20) ny = 20; if (ny > canvas.height - 20) ny = canvas.height - 20;
+
+                    let isBlocked = false;
+                    for (let b of buildings) {
+                        if (nx > b.x - 5 && nx < b.x + b.w + 5 && ny > b.y - 5 && ny < b.y + b.h + 5) {
+                            isBlocked = true; break;
+                        }
+                    }
+                    if (policeStation && !isBlocked) {
+                        const ps = policeStation;
+                        if (nx > ps.x - 5 && nx < ps.x + ps.w + 5 && ny > ps.y - 5 && ny < ps.y + ps.h + 5) {
+                            isBlocked = true;
+                        }
+                    }
+
+                    if (!isBlocked) {
+                        let node = { x: nx, y: ny, neighbors: [], id: r * cols + c };
+                        node.isExit = (c === 0 || c === cols - 1 || r === 0 || r === rows - 1);
+                        roadNodes.push(node);
+                    }
+                }
+            }
+            roadNodes.forEach(n => {
+                roadNodes.forEach(other => {
+                    if (n === other) return;
+                    const dx = Math.abs(n.x - other.x);
+                    const dy = Math.abs(n.y - other.y);
+                    if ((dx < 5 && dy < 150) || (dy < 5 && dx < 170)) {
+                        if (!isLineBlocked(n.x, n.y, other.x, other.y)) {
+                            n.neighbors.push(other);
+                        }
+                    }
+                });
+            });
+        }
+
+        function isLineBlocked(x1, y1, x2, y2) {
+            const midX = (x1 + x2) / 2;
+            const midY = (y1 + y2) / 2;
+            for (let b of buildings) {
+                if (midX > b.x && midX < b.x + b.w && midY > b.y && midY < b.y + b.h) return true;
+            }
+            if (policeStation) {
+                const ps = policeStation;
+                if (midX > ps.x && midX < ps.x + ps.w && midY > ps.y && midY < ps.y + ps.h) return true;
+            }
+            return false;
+        }
+
+        function syncRobbersPosition() {
+            robbers.forEach(r => {
+                if (r.worldX === worldState.x && r.worldY === worldState.y) {
+                    if (r.x === 0 && r.y === 0) {
+                        const startNode = roadNodes[Math.floor(Math.random() * roadNodes.length)];
+                        if (startNode) { r.x = startNode.x; r.y = startNode.y; }
+                    }
+                }
+            });
+        }
+
+        function checkCollision(obj, nextX, nextY) {
+            const pSize = obj.size - 4;
+            for (let b of buildings) {
+                if (nextX - pSize / 2 < b.x + b.w && nextX + pSize / 2 > b.x && nextY - pSize / 2 < b.y + b.h && nextY + pSize / 2 > b.y) {
+                    return true;
+                }
+            }
+            if (policeStation && obj !== player) {
+                const ps = policeStation;
+                if (nextX - pSize / 2 < ps.x + ps.w && nextX + pSize / 2 > ps.x && nextY - pSize / 2 < ps.y + ps.h && nextY + pSize / 2 > ps.y) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function checkBorderExit(nextX, nextY) {
+            if (nextX < 0 || nextX > canvas.width || nextY < 0 || nextY > canvas.height) {
+                if (nextX < 0 || nextX > canvas.width) {
+                    for (let r = 0; r <= mapConfig.rows; r++) {
+                        const roadY = mapConfig.startY - (mapConfig.gap / 2) + r * (mapConfig.bHeight + mapConfig.gap);
+                        if (nextY > roadY - 20 && nextY < roadY + 20) return true;
+                    }
+                }
+                if (nextY < 0 || nextY > canvas.height) {
+                    for (let c = 0; c <= mapConfig.cols; c++) {
+                        const roadX = mapConfig.startX - (mapConfig.gap / 2) + c * (mapConfig.bWidth + mapConfig.gap);
+                        if (nextX > roadX - 20 && nextX < roadX + 20) return true;
+                    }
+                }
+                return false;
+            }
+            return true;
+        }
+
+        function findPath(startNode, endNode, isRobber = false) {
+            if (!startNode || !endNode) return [];
+            let openSet = [startNode];
+            let cameFrom = new Map();
+            let gScore = new Map();
+            let fScore = new Map();
+            roadNodes.forEach(n => { gScore.set(n, Infinity); fScore.set(n, Infinity); });
+            gScore.set(startNode, 0);
+            fScore.set(startNode, heuristic(startNode, endNode));
+
+            let loopSafety = 0;
+            while (openSet.length > 0) {
+                if (loopSafety++ > 1000) return [];
+                let current = openSet.reduce((a, b) => fScore.get(a) < fScore.get(b) ? a : b);
+                if (current === endNode) {
+                    let totalPath = [current];
+                    while (cameFrom.has(current)) { current = cameFrom.get(current); totalPath.unshift(current); }
+                    return totalPath;
+                }
+                openSet = openSet.filter(n => n !== current);
+                for (let neighbor of current.neighbors) {
+                    if (isRobber && policeStation) {
+                        const ps = policeStation;
+                        if (neighbor.x > ps.x - 30 && neighbor.x < ps.x + ps.w + 30 &&
+                            neighbor.y > ps.y - 30 && neighbor.y < ps.y + ps.h + 30) {
+                            continue;
+                        }
+                    }
+                    let tentative_gScore = gScore.get(current) + distance(current, neighbor);
+                    if (tentative_gScore < gScore.get(neighbor)) {
+                        cameFrom.set(neighbor, current); gScore.set(neighbor, tentative_gScore);
+                        fScore.set(neighbor, gScore.get(neighbor) + heuristic(neighbor, endNode));
+                        if (!openSet.includes(neighbor)) openSet.push(neighbor);
+                    }
+                }
+            }
+            return [];
+        }
+        function heuristic(a, b) { return Math.abs(a.x - b.x) + Math.abs(a.y - b.y); }
+        function distance(a, b) { return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2); }
+
+        function getNearestNode(x, y) {
+            let nearest = null; let minDist = Infinity;
+            for (let node of roadNodes) { let d = Math.sqrt((node.x - x) ** 2 + (node.y - y) ** 2); if (d < minDist) { minDist = d; nearest = node; } }
+            return nearest;
+        }
+
+        function getBestFleeNode(r, currentNode) {
+            if (!currentNode || !currentNode.neighbors) return null;
+            let bestNode = null;
+            let maxScore = -Infinity;
+
+            for (let neighbor of currentNode.neighbors) {
+                let score = 0;
+                const distToPlayer = Math.sqrt((neighbor.x - player.x) ** 2 + (neighbor.y - player.y) ** 2);
+                score += distToPlayer;
+                const currentDistToPlayer = Math.sqrt((r.x - player.x) ** 2 + (r.y - player.y) ** 2);
+                if (distToPlayer < currentDistToPlayer) score -= 2000;
+                if (score > maxScore) { maxScore = score; bestNode = neighbor; }
+            }
+            return bestNode;
+        }
+
+        // --- 업데이트 ---
+        function update() {
+            if (gameState.screen === 'gameover') return;
+            if (gameState.screen !== 'playing') return;
+            if (gameState.isPaused) return;
+
+            gameState.globalTimer++;
+
+            if (robbers.length > MAX_ROBBERS) {
+                gameState.screen = 'gameover';
+                return;
+            }
+
+            const gameTime = getCurrentGameTime();
+
+            if (gameState.freezeActiveTime > 0) {
+                gameState.freezeActiveTime--;
+                spawner.nextSpawnTime += 1000 / 60;
+            } else if (gameTime >= spawner.nextSpawnTime) {
+                spawnRobber();
+            }
+
+            if (gameState.slowAuraActiveTime > 0) {
+                gameState.slowAuraActiveTime--;
+            }
+
+            if (gameState.globalTimer > 3600) {
+                gameState.itemSpawnTimer++;
+                if (gameState.itemSpawnTimer > 2400) {
+                    gameState.itemSpawnTimer = 0;
+                    spawnRandomItem();
+                }
+            }
+
+            for (let i = items.length - 1; i >= 0; i--) {
+                const item = items[i];
+                if (item.worldX === worldState.x && item.worldY === worldState.y) {
+                    const dist = Math.sqrt((player.x - item.x) ** 2 + (player.y - item.y) ** 2);
+                    if (dist < player.size + item.size) {
+                        if (item.type === 'FREEZE') {
+                            gameState.freezeActiveTime = gameState.maxFreezeTime;
+                            showGameMessage("❄️ TIME FREEZE! (10초)", "cyan", 300);
+                        } else if (item.type === 'SLOW_AURA') {
+                            gameState.slowAuraActiveTime = gameState.maxSlowAuraTime;
+                            showGameMessage("🚧 SLOW AURA! (30초)", "orange", 300);
+                        }
+                        items.splice(i, 1);
+                    }
+                }
+            }
+
+            for (let i = gameState.messages.length - 1; i >= 0; i--) {
+                gameState.messages[i].life--;
+                if (gameState.messages[i].life <= 0) {
+                    gameState.messages.splice(i, 1);
+                }
+            }
+
+            const weightPenalty = gameState.prisoners * 0.15;
+            const currentBaseSpeed = Math.max(1.0, player.baseSpeed - weightPenalty);
+
+            const moveSpeed = keys.shift && player.stamina > 0 ? player.sprintSpeed : currentBaseSpeed;
+
+            if (keys.shift && player.stamina > 0 && (keys.w || keys.a || keys.s || keys.d)) {
+                player.stamina -= 0.5;
+            }
+
+            if (keys.w || keys.a || keys.s || keys.d) {
+                player.currentDisplaySpeed = moveSpeed;
+            } else {
+                player.currentDisplaySpeed = 0;
+            }
+
+            let nextX = player.x; let nextY = player.y;
+            if (keys.w) { nextY -= moveSpeed; player.rotation = -Math.PI / 2; }
+            if (keys.s) { nextY += moveSpeed; player.rotation = Math.PI / 2; }
+            if (keys.a) { nextX -= moveSpeed; player.rotation = Math.PI; }
+            if (keys.d) { nextX += moveSpeed; player.rotation = 0; }
+
+            if (keys.w && keys.d) player.rotation = -Math.PI / 4;
+            if (keys.w && keys.a) player.rotation = -3 * Math.PI / 4;
+            if (keys.s && keys.d) player.rotation = Math.PI / 4;
+            if (keys.s && keys.a) player.rotation = 3 * Math.PI / 4;
+
+            let collided = checkCollision(player, nextX, nextY);
+            if (!collided && !checkBorderExit(nextX, nextY)) collided = true;
+
+            if (!collided) {
+                player.x = nextX;
+                player.y = nextY;
+            }
+
+            if (player.x < -player.size / 2) { if (worldState.x > 0) { worldState.x--; createCity('left'); } else player.x = 0; }
+            else if (player.x > canvas.width + player.size / 2) { if (worldState.x < 2) { worldState.x++; createCity('right'); } else player.x = canvas.width; }
+            else if (player.y < -player.size / 2) { if (worldState.y > 0) { worldState.y--; createCity('up'); } else player.y = 0; }
+            else if (player.y > canvas.height + player.size / 2) { if (worldState.y < 2) { worldState.y++; createCity('down'); } else player.y = canvas.height; }
+
+            if (policeStation) {
+                const ps = policeStation;
+                if (worldState.x === 1 && worldState.y === 1 &&
+                    player.x > ps.x && player.x < ps.x + ps.w &&
+                    player.y > ps.y && player.y < ps.y + ps.h) {
+
+                    if (!gameState.wasInStation) {
+                        gameState.wasInStation = true;
+
+                        if (player.stamina < player.maxStamina) {
+                            player.stamina = player.maxStamina;
+                            showGameMessage("⚡ 부스트 충전 완료!", "#00FFFF", 120);
+                        }
+
+                        gameState.intelObtained = true;
+                        showGameMessage("📡 위치 정보 갱신 완료!", "cyan", 120);
+
+                        if (gameState.prisoners > 0) {
+                            const scoreAdd = gameState.prisoners * 100;
+                            gameState.score += scoreAdd;
+                            gameState.arrests += gameState.prisoners;
+                            showGameMessage(`✅ 이송 완료! +${scoreAdd}점`, "lime", 150);
+                            gameState.prisoners = 0;
+                            gameState.isCarrying = false;
+                        }
+                    }
+                } else {
+                    gameState.wasInStation = false;
+                }
+            } else {
+                gameState.wasInStation = false;
+            }
+
+            updateRobbers();
+        }
+
+        function updateRobbers() {
+            if (gameState.freezeActiveTime > 0) return;
+
+            for (let i = robbers.length - 1; i >= 0; i--) {
+                const r = robbers[i];
+                if (r.worldX === worldState.x && r.worldY === worldState.y) {
+                    moveRobberAI(r);
+                    const dist = Math.sqrt((player.x - r.x) ** 2 + (player.y - r.y) ** 2);
+                    if (dist < 30) {
+                        robbers.splice(i, 1);
+                        gameState.prisoners++;
+                        gameState.isCarrying = true;
+                        showGameMessage("체포 성공! 경찰서로 압송하라!", "#2ecc71", 120);
+                    }
+                } else {
+                    r.offScreenTimer++;
+                    if (r.offScreenTimer > 180) {
+                        r.offScreenTimer = 0;
+                        if (Math.random() > 0.5) {
+                            const dx = Math.floor(Math.random() * 3) - 1;
+                            const dy = Math.floor(Math.random() * 3) - 1;
+                            r.worldX = Math.max(0, Math.min(2, r.worldX + dx));
+                            r.worldY = Math.max(0, Math.min(2, r.worldY + dy));
+
+                            if (r.worldX === 1 && r.worldY === 1) {
+                                if (getRobberCountInStage(1, 1) >= MAX_CENTER_ROBBERS) {
+                                    r.worldX -= dx;
+                                    r.worldY -= dy;
+                                    if (dx !== 0) r.x = (dx > 0) ? canvas.width - 30 : 30;
+                                    if (dy !== 0) r.y = (dy > 0) ? canvas.height - 30 : 30;
+                                    r.targetNode = null;
+                                    continue;
+                                }
+                            }
+
+                            if (r.worldX === worldState.x && r.worldY === worldState.y) {
+                                const edgeNodes = roadNodes.filter(n => n.isExit);
+                                if (edgeNodes.length > 0) {
+                                    const entry = edgeNodes[Math.floor(Math.random() * edgeNodes.length)];
+                                    r.x = entry.x; r.y = entry.y;
+                                    showGameMessage("⚠️ 도둑이 현재 구역으로 진입했습니다!", "orange", 150);
+                                } else { r.x = 0; r.y = 0; }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        function moveRobberAI(r) {
+            const distToPlayer = Math.sqrt((player.x - r.x) ** 2 + (player.y - r.y) ** 2);
+            if (distToPlayer < 200) {
+                r.state = 'FLEE';
+            } else {
+                r.state = 'ROAM';
+            }
+
+            let currentSpeed = r.speed;
+
+            if (gameState.slowAuraActiveTime > 0) {
+                if (distToPlayer < 200) {
+                    currentSpeed *= 0.4;
+                }
+            }
+
+            if (r.state === 'FLEE') {
+                if (r.stamina > 0) {
+                    currentSpeed = (gameState.slowAuraActiveTime > 0 && distToPlayer < 200) ?
+                        r.sprintSpeed * 0.4 : r.sprintSpeed;
+                    r.stamina -= 0.5;
+                } else {
+                    currentSpeed = 1.0;
+                }
+
+                if (!r.targetNode || r.path.length === 0) {
+                    const startNode = getNearestNode(r.x, r.y);
+                    const fleeNode = getBestFleeNode(r, startNode);
+                    if (fleeNode) {
+                        const path = findPath(startNode, fleeNode, true);
+                        if (path.length > 0) { r.path = path; r.targetNode = path[0]; }
+                    }
+                }
+            } else {
+                r.speed = r.baseSpeed;
+                if (gameState.slowAuraActiveTime > 0 && distToPlayer < 200) {
+                    currentSpeed = r.baseSpeed * 0.4;
+                } else {
+                    currentSpeed = r.baseSpeed;
+                }
+
+                if (r.stamina < 100) r.stamina += 0.3;
+
+                if (!r.roamTarget) {
+                    if (roadNodes.length > 0) {
+                        r.roamTarget = roadNodes[Math.floor(Math.random() * roadNodes.length)];
+                        const startNode = getNearestNode(r.x, r.y);
+                        const path = findPath(startNode, r.roamTarget, true);
+                        if (path.length > 0) { r.path = path; r.targetNode = path[0]; }
+                    }
+                }
+            }
+
+            let nextX = r.x; let nextY = r.y;
+
+            if (r.path.length > 0) {
+                r.targetNode = r.path[0];
+                const dx = r.targetNode.x - r.x;
+                const dy = r.targetNode.y - r.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist < 5) {
+                    r.x = r.targetNode.x; r.y = r.targetNode.y;
+                    r.path.shift();
+                    if (r.path.length === 0) {
+                        r.targetNode = null;
+                        r.roamTarget = null;
+                    }
+                } else {
+                    nextX += (dx / dist) * currentSpeed;
+                    nextY += (dy / dist) * currentSpeed;
+                }
+            } else if (r.targetNode) {
+                const dx = r.targetNode.x - r.x;
+                const dy = r.targetNode.y - r.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < 5) { r.x = r.targetNode.x; r.y = r.targetNode.y; r.targetNode = null; }
+                else { nextX += (dx / dist) * currentSpeed; nextY += (dy / dist) * currentSpeed; }
+            } else {
+                r.roamTarget = null;
+            }
+
+            if (!checkCollision(r, nextX, nextY)) {
+                r.x = nextX; r.y = nextY;
+            } else {
+                r.path = []; r.targetNode = null; r.roamTarget = null;
+            }
+
+            if (r.x < 5 && r.worldX > 0) {
+                if (r.worldX - 1 === 1 && r.worldY === 1 && getRobberCountInStage(1, 1) >= MAX_CENTER_ROBBERS) {
+                    r.x = 20; r.targetNode = null;
+                } else {
+                    r.worldX--; r.x = canvas.width - 20; r.targetNode = null;
+                }
+            } else if (r.x > canvas.width - 5 && r.worldX < 2) {
+                if (r.worldX + 1 === 1 && r.worldY === 1 && getRobberCountInStage(1, 1) >= MAX_CENTER_ROBBERS) {
+                    r.x = canvas.width - 20; r.targetNode = null;
+                } else {
+                    r.worldX++; r.x = 20; r.targetNode = null;
+                }
+            }
+
+            else if (r.y < 5 && r.worldY > 0) {
+                if (r.worldX === 1 && r.worldY - 1 === 1 && getRobberCountInStage(1, 1) >= MAX_CENTER_ROBBERS) {
+                    r.y = 20; r.targetNode = null;
+                } else {
+                    r.worldY--; r.y = canvas.height - 20; r.targetNode = null;
+                }
+            } else if (r.y > canvas.height - 5 && r.worldY < 2) {
+                if (r.worldX === 1 && r.worldY + 1 === 1 && getRobberCountInStage(1, 1) >= MAX_CENTER_ROBBERS) {
+                    r.y = canvas.height - 20; r.targetNode = null;
+                } else {
+                    r.worldY++; r.y = 20; r.targetNode = null;
+                }
+            }
+        }
+
+        // --- 렌더링 ---
+        function draw() {
+            if (gameState.screen === 'start') {
+                drawStartScreen();
+                return;
+            }
+            if (gameState.screen === 'gameover') {
+                drawGameOverScreen();
+                return;
+            }
+
+            ctx.fillStyle = "#111";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            drawMapBorders();
+
+            ctx.strokeStyle = "#444"; ctx.lineWidth = 40; ctx.lineCap = "round"; ctx.beginPath();
+            roadNodes.forEach(n => { n.neighbors.forEach(nb => { ctx.moveTo(n.x, n.y); ctx.lineTo(nb.x, nb.y); }); }); ctx.stroke();
+            ctx.strokeStyle = "#f39c12"; ctx.lineWidth = 2; ctx.setLineDash([15, 15]); ctx.beginPath();
+            roadNodes.forEach(n => { n.neighbors.forEach(nb => { ctx.moveTo(n.x, n.y); ctx.lineTo(nb.x, nb.y); }); }); ctx.stroke(); ctx.setLineDash([]);
+
+            buildings.forEach((b, idx) => {
+                ctx.fillStyle = b.color;
+                ctx.fillRect(b.x, b.y, b.w, b.h);
+                ctx.strokeStyle = "#222"; ctx.lineWidth = 2;
+                ctx.strokeRect(b.x, b.y, b.w, b.h);
+
+                ctx.fillStyle = "#2c3e50";
+                const winW = 15; const winH = 10; const gap = 10;
+                for (let fy = 0; fy < b.floors; fy++) {
+                    for (let fx = 0; fx < 3; fx++) {
+                        const wx = b.x + 10 + fx * (winW + gap);
+                        const wy = b.y + 10 + fy * (winH + gap);
+                        if ((idx + fx + fy) % 3 === 0) ctx.fillStyle = "#f1c40f";
+                        else ctx.fillStyle = "#2c3e50";
+                        ctx.fillRect(wx, wy, winW, winH);
+                    }
+                }
+
+                ctx.fillStyle = "#3e2723";
+                ctx.fillRect(b.x + b.w / 2 - 10, b.y + b.h - 15, 20, 15);
+
+                if (worldState.x === spawner.targetWX && worldState.y === spawner.targetWY && idx === spawner.targetBuildingIdx) {
+                    const gameTime = getCurrentGameTime();
+                    let displayTime = spawner.nextSpawnTime - gameTime;
+                    if (gameState.freezeActiveTime > 0) displayTime = spawner.interval;
+
+                    const timeLeft = Math.max(0, spawner.nextSpawnTime - gameTime);
+                    const progress = 1 - (timeLeft / spawner.interval);
+                    const fillHeight = Math.max(0, Math.min(b.h, b.h * progress));
+
+                    ctx.strokeStyle = "#FF0000"; ctx.lineWidth = 3;
+                    ctx.strokeRect(b.x - 2, b.y - 2, b.w + 4, b.h + 4);
+
+                    ctx.fillStyle = "rgba(255, 215, 0, 0.6)";
+                    ctx.fillRect(b.x, b.y + b.h - fillHeight, b.w, fillHeight);
+
+                    ctx.fillStyle = (Math.floor(Date.now() / 100) % 2 === 0) ? "red" : "#500";
+                    ctx.beginPath(); ctx.arc(b.x + b.w / 2, b.y - 10, 6, 0, Math.PI * 2); ctx.fill();
+                }
+            });
+
+            if (policeStation) {
+                const ps = policeStation;
+                const isPlayerInside = (player.x > ps.x && player.x < ps.x + ps.w && player.y > ps.y && player.y < ps.y + ps.h);
+
+                ctx.save();
+                if (isPlayerInside) ctx.globalAlpha = 0.5;
+
+                ctx.fillStyle = "#1a252f"; ctx.fillRect(ps.x, ps.y, ps.w, ps.h);
+                ctx.strokeStyle = "#3498db"; ctx.lineWidth = 4; ctx.strokeRect(ps.x, ps.y, ps.w, ps.h);
+
+                ctx.fillStyle = "#3498db";
+                ctx.fillRect(ps.x + 10, ps.y + 12, 18, 12);
+                ctx.fillRect(ps.x + ps.w - 28, ps.y + 12, 18, 12);
+
+                ctx.fillStyle = "#7f8c8d"; ctx.fillRect(ps.x + ps.w / 2 - 12, ps.y + ps.h - 24, 24, 24);
+
+                ctx.fillStyle = "#ecf0f1"; ctx.font = "bold 11px Arial"; ctx.textAlign = "center";
+                ctx.fillText("POLICE", ps.x + ps.w / 2, ps.y + 10);
+
+                const blink = Math.floor(gameState.globalTimer / 15) % 2 === 0;
+                ctx.fillStyle = blink ? "red" : "#700"; ctx.beginPath(); ctx.arc(ps.x + 10, ps.y - 6, 5, 0, Math.PI * 2); ctx.fill();
+                ctx.fillStyle = !blink ? "blue" : "#007"; ctx.beginPath(); ctx.arc(ps.x + ps.w - 10, ps.y - 6, 5, 0, Math.PI * 2); ctx.fill();
+
+                ctx.restore();
+            }
+
+            items.forEach(item => {
+                if (item.worldX === worldState.x && item.worldY === worldState.y) {
+                    item.bounceOffset = Math.sin(gameState.globalTimer * 0.1) * 3;
+                    ctx.save();
+                    ctx.translate(item.x, item.y + item.bounceOffset);
+
+                    ctx.shadowBlur = 15; ctx.shadowColor = item.color;
+                    ctx.fillStyle = item.color;
+                    ctx.beginPath(); ctx.arc(0, 0, 8, 0, Math.PI * 2); ctx.fill();
+
+                    ctx.fillStyle = "white"; ctx.font = "10px Arial"; ctx.textAlign = "center";
+                    ctx.fillText("❄️", 0, 4);
+
+                    ctx.restore();
+                }
+            });
+
+            robbers.forEach(r => {
+                if (r.worldX === worldState.x && r.worldY === worldState.y) {
+                    ctx.fillStyle = r.color; ctx.beginPath(); ctx.arc(r.x, r.y, 10, 0, Math.PI * 2); ctx.fill();
+
+                    if (gameState.freezeActiveTime > 0) {
+                        ctx.strokeStyle = "cyan"; ctx.lineWidth = 2; ctx.stroke();
+                    } else if (gameState.slowAuraActiveTime > 0) {
+                        const d = Math.sqrt((player.x - r.x) ** 2 + (player.y - r.y) ** 2);
+                        if (d < 200) {
+                            ctx.strokeStyle = "orange"; ctx.lineWidth = 2; ctx.stroke();
+                        }
+                    }
+
+                    ctx.fillStyle = "black"; ctx.fillRect(r.x - 8, r.y - 4, 16, 4);
+                }
+            });
+
+            if (gameState.slowAuraActiveTime > 0) {
+                ctx.save();
+                ctx.translate(player.x, player.y);
+                ctx.fillStyle = "rgba(255, 165, 0, 0.2)";
+                ctx.beginPath();
+                ctx.arc(0, 0, 200, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = "rgba(255, 165, 0, 0.5)";
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                ctx.restore();
+            }
+
+            drawPlayerCar();
+            drawFog();
+            drawUI();
+
+            if (gameState.freezeActiveTime > 0) {
+                const ratio = gameState.freezeActiveTime / gameState.maxFreezeTime;
+                ctx.save();
+                ctx.fillStyle = `rgba(0, 255, 255, ${ratio * 0.15})`;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.strokeStyle = `rgba(0, 255, 255, ${ratio * 0.8})`;
+                ctx.lineWidth = 30 * ratio;
+                ctx.strokeRect(0, 0, canvas.width, canvas.height);
+
+                if (gameState.freezeActiveTime > 540) {
+                    ctx.fillStyle = "cyan";
+                    ctx.font = "bold 40px Malgun Gothic";
+                    ctx.textAlign = "center";
+                    ctx.shadowBlur = 20; ctx.shadowColor = "blue";
+                    ctx.fillText("❄️ TIME FREEZE! ❄️", canvas.width / 2, canvas.height / 2);
+                }
+                ctx.restore();
+            }
+
+            if (gameState.isPaused) {
+                ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                ctx.strokeStyle = "#555";
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(canvas.width / 2, 100);
+                ctx.lineTo(canvas.width / 2, canvas.height - 100);
+                ctx.stroke();
+
+                ctx.fillStyle = "white";
+                ctx.font = "bold 40px Malgun Gothic";
+                ctx.textAlign = "center";
+                ctx.fillText("PAUSED", canvas.width / 4, canvas.height / 2 - 50);
+
+                const btnW = 200; const btnH = 50;
+                const btnX = canvas.width / 4 - btnW / 2;
+                const btnY = canvas.height / 2 + 20;
+
+                if (gameState.isHoveringMenuBtn) {
+                    ctx.fillStyle = "#c0392b"; canvas.style.cursor = "pointer";
+                } else {
+                    ctx.fillStyle = "#e74c3c"; canvas.style.cursor = "default";
+                }
+                ctx.fillRect(btnX, btnY, btnW, btnH);
+                ctx.lineWidth = 2; ctx.strokeStyle = "white"; ctx.strokeRect(btnX, btnY, btnW, btnH);
+
+                ctx.fillStyle = "white"; ctx.font = "bold 20px Malgun Gothic";
+                ctx.fillText("MAIN MENU", canvas.width / 4, btnY + 33);
+
+                const guideX = canvas.width * 0.75;
+                const guideY = canvas.height / 2 - 60;
+                ctx.textAlign = "center";
+
+                ctx.fillStyle = "#FFD700";
+                ctx.font = "bold 20px Malgun Gothic";
+                ctx.fillText("CONTROLS", guideX, guideY);
+
+                ctx.fillStyle = "#ddd";
+                ctx.font = "13px Malgun Gothic";
+                ctx.fillText("이동 : W, A, S, D", guideX, guideY + 35);
+                ctx.fillText("부스트 : Shift (스태미나 소모)", guideX, guideY + 70);
+                ctx.fillText("위성 스캔 : M", guideX, guideY + 105);
+                ctx.fillText("일시정지 : ESC", guideX, guideY + 140);
+            }
+        }
+
+        function drawGameOverScreen() {
+            ctx.fillStyle = "black";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = "red";
+            ctx.font = "bold 50px Malgun Gothic";
+            ctx.textAlign = "center";
+            ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2 - 50);
+
+            ctx.fillStyle = "white";
+            ctx.font = "24px Malgun Gothic";
+            ctx.fillText(`도시가 함락되었습니다! (범죄자 ${robbers.length}명)`, canvas.width / 2, canvas.height / 2 + 10);
+            ctx.fillText(`최종 점수: ${gameState.score}`, canvas.width / 2, canvas.height / 2 + 50);
+
+            ctx.fillStyle = "#777";
+            ctx.font = "16px Malgun Gothic";
+            ctx.fillText("Click or Press SPACE to Restart", canvas.width / 2, canvas.height / 2 + 100);
+        }
+
+        function drawMapBorders() {
+            ctx.fillStyle = "#050505";
+
+            if (worldState.x === 0) ctx.fillRect(0, 0, mapConfig.startX, canvas.height);
+            if (worldState.x === 2) ctx.fillRect(canvas.width - mapConfig.startX, 0, mapConfig.startX, canvas.height);
+            if (worldState.y === 0) ctx.fillRect(0, 0, canvas.width, mapConfig.startY);
+            if (worldState.y === 2) ctx.fillRect(0, canvas.height - mapConfig.startY, canvas.width, mapConfig.startY);
+
+            ctx.strokeStyle = "#444"; ctx.lineWidth = 40; ctx.lineCap = "butt";
+
+            if (worldState.x > 0) {
+                for (let r = 0; r <= mapConfig.rows; r++) {
+                    const ry = mapConfig.startY - (mapConfig.gap / 2) + r * (mapConfig.bHeight + mapConfig.gap);
+                    ctx.beginPath(); ctx.moveTo(-30, ry); ctx.lineTo(mapConfig.startX + 20, ry); ctx.stroke();
+                }
+            }
+            if (worldState.x < 2) {
+                for (let r = 0; r <= mapConfig.rows; r++) {
+                    const ry = mapConfig.startY - (mapConfig.gap / 2) + r * (mapConfig.bHeight + mapConfig.gap);
+                    ctx.beginPath(); ctx.moveTo(canvas.width - mapConfig.startX - 20, ry); ctx.lineTo(canvas.width + 30, ry); ctx.stroke();
+                }
+            }
+            if (worldState.y > 0) {
+                for (let c = 0; c <= mapConfig.cols; c++) {
+                    const cx = mapConfig.startX - (mapConfig.gap / 2) + c * (mapConfig.bWidth + mapConfig.gap);
+                    ctx.beginPath(); ctx.moveTo(cx, -30); ctx.lineTo(cx, mapConfig.startY + 20); ctx.stroke();
+                }
+            }
+            if (worldState.y < 2) {
+                for (let c = 0; c <= mapConfig.cols; c++) {
+                    const cx = mapConfig.startX - (mapConfig.gap / 2) + c * (mapConfig.bWidth + mapConfig.gap);
+                    ctx.beginPath(); ctx.moveTo(cx, canvas.height - mapConfig.startY - 20); ctx.lineTo(cx, canvas.height + 30); ctx.stroke();
+                }
+            }
+        }
+
+        function drawPlayerCar() {
+            ctx.save(); ctx.translate(player.x, player.y); ctx.rotate(player.rotation);
+            ctx.fillStyle = player.color; ctx.fillRect(-12, -8, 24, 16);
+            ctx.fillStyle = "#87ceeb"; ctx.fillRect(2, -6, 6, 12); ctx.fillRect(-10, -6, 4, 12);
+            ctx.fillStyle = "yellow"; ctx.fillRect(12, -7, 2, 4); ctx.fillRect(12, 3, 2, 4);
+            if (Math.floor(Date.now() / 100) % 2 === 0) { ctx.fillStyle = "red"; ctx.fillRect(-4, -4, 4, 4); ctx.fillStyle = "blue"; ctx.fillRect(-4, 0, 4, 4); }
+            else { ctx.fillStyle = "blue"; ctx.fillRect(-4, -4, 4, 4); ctx.fillStyle = "red"; ctx.fillRect(-4, 0, 4, 4); }
+            ctx.restore();
+            if (gameState.isCarrying) {
+                ctx.save(); ctx.translate(player.x, player.y); ctx.fillStyle = "white"; ctx.font = "bold 12px Arial"; ctx.textAlign = "center"; ctx.fillText(`이송: ${gameState.prisoners}`, 0, -25); ctx.restore();
+            }
+        }
+
+        function drawFog() {
+            maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+            maskCtx.globalCompositeOperation = 'source-over';
+            maskCtx.fillStyle = "rgba(0, 0, 0, 0.6)";
+            maskCtx.fillRect(0, 0, canvas.width, canvas.height);
+            maskCtx.globalCompositeOperation = 'destination-out';
+            maskCtx.beginPath(); maskCtx.moveTo(player.x, player.y);
+            maskCtx.arc(player.x, player.y, player.viewDistance, player.rotation - player.fov / 2, player.rotation + player.fov / 2);
+            maskCtx.lineTo(player.x, player.y); maskCtx.fill();
+            maskCtx.beginPath(); maskCtx.arc(player.x, player.y, player.ambientRadius, 0, Math.PI * 2); maskCtx.fill();
+
+            if (policeStation && worldState.x === 1 && worldState.y === 1) {
+                maskCtx.beginPath(); maskCtx.arc(policeStation.x + policeStation.w / 2, policeStation.y + policeStation.h / 2, 130, 0, Math.PI * 2); maskCtx.fill();
+            }
+
+            ctx.drawImage(maskCanvas, 0, 0);
+        }
+
+        function drawUI() {
+            let startY = 50;
+            gameState.messages.forEach((msg, index) => {
+                ctx.font = "bold 15px Malgun Gothic";
+                const textW = ctx.measureText(msg.text).width;
+                const bgH = 22;
+                const y = startY + (index * 25);
+
+                ctx.globalAlpha = Math.min(1, msg.life / 30);
+                ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+                ctx.fillRect((canvas.width / 2) - (textW / 2) - 8, y - 16, textW + 16, bgH);
+
+                ctx.fillStyle = msg.color;
+                ctx.textAlign = "center";
+                ctx.fillText(msg.text, canvas.width / 2, y);
+                ctx.globalAlpha = 1.0;
+            });
+
+            ctx.fillStyle = "white"; ctx.font = "bold 20px Malgun Gothic";
+            ctx.textAlign = "center";
+            ctx.fillText(`SCORE: ${gameState.score}`, canvas.width / 2, 30);
+
+            ctx.textAlign = "left";
+            ctx.fillStyle = "#333"; ctx.fillRect(20, 50, 200, 20); ctx.lineWidth = 2; ctx.strokeStyle = "#fff"; ctx.strokeRect(20, 50, 200, 20);
+            const ratio = player.stamina / player.maxStamina;
+            ctx.fillStyle = ratio < 0.3 ? "red" : "#00FFFF";
+            ctx.fillRect(22, 52, 196 * ratio, 16);
+            ctx.fillStyle = "white"; ctx.font = "bold 14px Arial"; ctx.fillText("BOOST", 20, 46);
+
+            const gameTime = getCurrentGameTime();
+            const timeLeft = Math.max(0, spawner.nextSpawnTime - gameTime);
+            const remaining = Math.ceil(timeLeft / 1000);
+
+            if (gameState.freezeActiveTime > 0) {
+                ctx.fillStyle = "cyan"; ctx.font = "bold 16px Arial";
+                ctx.fillText(`❄️ TIME FROZEN ❄️`, 20, 90);
+            } else {
+                ctx.fillStyle = "#FFD700"; ctx.font = "bold 16px Arial";
+                ctx.fillText(`침입까지: ${remaining}초`, 20, 90);
+            }
+
+            ctx.textAlign = "center";
+            const speedKmh = Math.round(player.currentDisplaySpeed * 32);
+            ctx.fillStyle = "rgba(0,0,0,0.5)";
+            ctx.beginPath(); ctx.arc(canvas.width / 2, canvas.height - 50, 40, Math.PI, 0); ctx.fill();
+            ctx.fillStyle = "white"; ctx.font = "bold 24px Arial";
+            ctx.fillText(`${speedKmh}`, canvas.width / 2, canvas.height - 55);
+            ctx.font = "12px Arial"; ctx.fillText("km/h", canvas.width / 2, canvas.height - 40);
+
+            const angle = Math.PI + (speedKmh / 150) * Math.PI;
+            const nx = canvas.width / 2 + Math.cos(angle) * 35;
+            const ny = (canvas.height - 50) + Math.sin(angle) * 35;
+            ctx.strokeStyle = "red"; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(canvas.width / 2, canvas.height - 50); ctx.lineTo(nx, ny); ctx.stroke();
+
+            drawMinimap();
+        }
+
+        function drawMinimap() {
+            const mmSize = 100; const mmX = canvas.width - mmSize - 10; const mmY = 10; const cell = mmSize / 3;
+            ctx.fillStyle = "rgba(0,0,0,0.7)"; ctx.fillRect(mmX, mmY, mmSize, mmSize);
+            ctx.strokeStyle = "white"; ctx.lineWidth = 2; ctx.strokeRect(mmX, mmY, mmSize, mmSize);
+            for (let r = 0; r < 3; r++) { for (let c = 0; c < 3; c++) { ctx.strokeStyle = "#555"; ctx.lineWidth = 1; ctx.strokeRect(mmX + c * cell, mmY + r * cell, cell, cell); } }
+
+            const psSize = cell / 3;
+            ctx.fillStyle = "#3498db";
+            ctx.fillRect(mmX + cell + (cell - psSize) / 2, mmY + cell + (cell - psSize) / 2, psSize, psSize);
+
+            const px = mmX + (worldState.x * cell) + (player.x / canvas.width * cell);
+            const py = mmY + (worldState.y * cell) + (player.y / canvas.height * cell);
+            ctx.fillStyle = "#2ecc71"; ctx.fillRect(px - 2, py - 2, 4, 4);
+
+            const cx = mmX + spawner.targetWX * cell;
+            const cy = mmY + spawner.targetWY * cell;
+            if (Math.floor(Date.now() / 300) % 2 === 0) {
+                ctx.fillStyle = "rgba(255,215,0,0.6)"; ctx.fillRect(cx + 1, cy + 1, cell - 2, cell - 2);
+            }
+
+            items.forEach(item => {
+                const ix = mmX + item.worldX * cell + (item.x / canvas.width * cell);
+                const iy = mmY + item.worldY * cell + (item.y / canvas.height * cell);
+                ctx.fillStyle = item.type === 'FREEZE' ? 'cyan' : 'orange';
+                ctx.fillRect(ix - 2, iy - 2, 4, 4);
+            });
+
+            robbers.forEach(r => {
+                if (gameState.intelObtained) {
+                    const rx = mmX + r.worldX * cell + (r.x / canvas.width * cell);
+                    const ry = mmY + r.worldY * cell + (r.y / canvas.height * cell);
+                    ctx.fillStyle = "red"; ctx.beginPath(); ctx.arc(rx, ry, 3, 0, Math.PI * 2); ctx.fill();
+                }
+            });
+
+            ctx.fillStyle = "white"; ctx.font = "bold 14px Arial"; ctx.textAlign = "center";
+            if (robbers.length > 40) ctx.fillStyle = "red";
+            else ctx.fillStyle = "white";
+            ctx.fillText(`범죄자: ${robbers.length}/${MAX_ROBBERS}`, mmX + mmSize / 2, mmY + mmSize + 20);
+
+            let currentElapsed = 0;
+            if (gameState.isPaused) {
+                currentElapsed = gameState.pauseStartTime - gameState.startTime - gameState.totalPausedTime;
+            } else {
+                currentElapsed = Date.now() - gameState.startTime - gameState.totalPausedTime;
+            }
+            if (currentElapsed < 0) currentElapsed = 0;
+
+            const totalSec = Math.floor(currentElapsed / 1000);
+            const m = Math.floor(totalSec / 60).toString().padStart(2, '0');
+            const s = (totalSec % 60).toString().padStart(2, '0');
+            ctx.fillStyle = "#AAA"; ctx.font = "12px Arial";
+            ctx.fillText(`${m}:${s}`, mmX + mmSize / 2, mmY + mmSize + 40);
+        }
+
+        function drawStartScreen() {
+            ctx.fillStyle = "#111"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = "cyan"; ctx.font = "bold 60px 'Malgun Gothic'"; ctx.textAlign = "center"; ctx.fillText("경찰 과 도둑", canvas.width / 2, 180);
+            ctx.fillStyle = "#FFD700"; ctx.font = "bold 24px 'Malgun Gothic'"; ctx.fillText("=== 목 표 ===", canvas.width / 2, 260);
+            ctx.fillStyle = "white"; ctx.font = "20px 'Malgun Gothic'"; ctx.fillText("도둑을 추격하여 체포한 뒤,", canvas.width / 2, 300); ctx.fillText("경찰서로 이송하여 점수를 획득하세요.", canvas.width / 2, 330);
+
+            const btnX = canvas.width / 2 - 100; const btnY = 500;
+
+            if (gameState.isHoveringBtn) {
+                ctx.fillStyle = "#27ae60"; canvas.style.cursor = "pointer";
+            } else {
+                ctx.fillStyle = "#28a745"; canvas.style.cursor = "default";
+            }
+
+            ctx.fillRect(btnX, btnY, 200, 60);
+            ctx.lineWidth = 3; ctx.strokeStyle = "white"; ctx.strokeRect(btnX, btnY, 200, 60);
+            ctx.fillStyle = "white"; ctx.font = "bold 24px 'Malgun Gothic'"; ctx.fillText("게임 시작", canvas.width / 2, btnY + 38);
+
+            ctx.textAlign = "right";
+            ctx.font = "14px Malgun Gothic";
+            ctx.fillStyle = "#7f8c8d";
+            ctx.fillText("이동: WASD / 부스트: Shift / 스캔: M / 일시정지: ESC", canvas.width - 20, canvas.height - 20);
+            ctx.textAlign = "center";
+        }
+
+        canvas.addEventListener('click', (e) => {
+            const pos = getMousePos(e);
+
+            if (gameState.screen === 'start' || gameState.screen === 'gameover') {
+                const btnX = canvas.width / 2 - 100; const btnY = 500;
+                if (gameState.screen === 'gameover') initGame();
+                else if (pos.x >= btnX && pos.x <= btnX + 200 && pos.y >= btnY && pos.y <= btnY + 60) initGame();
+            }
+            else if (gameState.screen === 'playing' && gameState.isPaused) {
+                const btnW = 200; const btnH = 50;
+                const btnX = canvas.width / 4 - btnW / 2;
+                const btnY = canvas.height / 2 + 20;
+                if (pos.x >= btnX && pos.x <= btnX + btnW && pos.y >= btnY && pos.y <= btnY + btnH) {
+                    gameState.screen = 'start';
+                    canvas.style.cursor = "default";
+                }
+            }
+        });
+
+        canvas.addEventListener('mousemove', e => {
+            const pos = getMousePos(e);
+            if (gameState.screen === 'start') {
+                const btnX = canvas.width / 2 - 100; const btnY = 500;
+                gameState.isHoveringBtn = (pos.x >= btnX && pos.x <= btnX + 200 && pos.y >= btnY && pos.y <= btnY + 60);
+            }
+            else if (gameState.screen === 'playing' && gameState.isPaused) {
+                const btnW = 200; const btnH = 50;
+                const btnX = canvas.width / 4 - btnW / 2;
+                const btnY = canvas.height / 2 + 20;
+                gameState.isHoveringMenuBtn = (pos.x >= btnX && pos.x <= btnX + btnW && pos.y >= btnY && pos.y <= btnY + btnH);
+            }
+        });
+
+        window.addEventListener('keydown', e => {
+            if (e.code === 'KeyM') {
+                gameState.intelObtained = true;
+                showGameMessage("📡 위성 스캔: 도둑 위치 수신됨", "#00FFFF", 200);
+            }
+            if (e.code === 'Escape') {
+                if (gameState.screen === 'playing') {
+                    gameState.isPaused = !gameState.isPaused;
+                    if (gameState.isPaused) {
+                        gameState.pauseStartTime = Date.now();
+                    } else {
+                        gameState.totalPausedTime += (Date.now() - gameState.pauseStartTime);
+                    }
+                }
+            }
+            if (e.code === 'Space') {
+                if (gameState.screen === 'start' || gameState.screen === 'gameover') initGame();
+            }
+            if (e.key === 'w' || e.key === 'W') keys.w = true;
+            if (e.key === 'a' || e.key === 'A') keys.a = true;
+            if (e.key === 's' || e.key === 'S') keys.s = true;
+            if (e.key === 'd' || e.key === 'D') keys.d = true;
+            if (e.key === 'Shift') keys.shift = true;
+        });
+        window.addEventListener('keyup', e => {
+            if (e.key === 'w' || e.key === 'W') keys.w = false;
+            if (e.key === 'a' || e.key === 'A') keys.a = false;
+            if (e.key === 's' || e.key === 'S') keys.s = false;
+            if (e.key === 'd' || e.key === 'D') keys.d = false;
+            if (e.key === 'Shift') keys.shift = false;
+        });
+
+        function loop() {
+            try {
+                update();
+                draw();
+            } catch (e) {
+                console.error(e);
+            }
+            requestAnimationFrame(loop);
+        }
+        loop();
+
+    </script>
+</body>
+</html>
