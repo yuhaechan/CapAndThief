@@ -1489,6 +1489,7 @@
             ctx.fillText(isSoundOn ? "🔊 ON" : "🔈 OFF", soundBtnX + 30, soundBtnY + 20);
         }
 
+
         canvas.addEventListener('click', (e) => {
             const pos = getMousePos(e);
 
@@ -1548,6 +1549,14 @@
                 const btnY = canvas.height/2 + 20;
                 gameState.isHoveringMenuBtn = (pos.x >= btnX && pos.x <= btnX+btnW && pos.y >= btnY && pos.y <= btnY+btnH);
             }
+        });
+        // --- 기존 keydown 이벤트 아래에 이 코드를 추가하세요 ---
+        window.addEventListener('keyup', e => {
+            if (e.key === 'w' || e.key === 'W') keys.w = false;
+            if (e.key === 'a' || e.key === 'A') keys.a = false;
+            if (e.key === 's' || e.key === 'S') keys.s = false;
+            if (e.key === 'd' || e.key === 'D') keys.d = false;
+            if (e.key === 'Shift') keys.shift = false;
         });
 
         window.addEventListener('keydown', e => {
