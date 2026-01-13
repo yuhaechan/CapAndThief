@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>경찰 과 도둑: City Defense</title>
+    <title>경찰 과 도둑: City Defense (v0.0.2)</title>
     <style>
         body {
             margin: 0;
@@ -24,10 +24,10 @@
             outline: none;
         }
         
-        /* 버전 정보 (우측 하단 고정, 최상위) */
+        /* 버전 정보 */
         #versionTag {
             position: absolute;
-            bottom: 15px;
+            bottom: 10px;
             right: 15px;
             color: #ffffff;
             font-size: 14px;
@@ -35,21 +35,20 @@
             font-family: monospace;
             pointer-events: none;
             z-index: 9999;
-            background-color: rgba(0, 0, 0, 0.6);
-            padding: 4px 8px;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 2px 6px;
             border-radius: 4px;
-            border: 1px solid #555;
         }
 
-        /* 랭킹/게임오버 UI 스타일 */
+        /* 랭킹 UI */
         #rankingUI {
-            display: none; /* 평소엔 숨김 */
+            display: none; 
             position: absolute;
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
             background: rgba(0, 0, 0, 0.95);
-            border: 2px solid #FF0000; /* 게임오버 느낌의 빨간 테두리 */
+            border: 2px solid #FF0000;
             padding: 30px;
             text-align: center;
             color: white;
@@ -87,7 +86,6 @@
         .rank-row:nth-child(2) { color: silver; }
         .rank-row:nth-child(3) { color: #cd7f32; }
 
-        /* 다시하기 버튼 */
         .restart-btn {
             background: #444; color: white; border: 1px solid #777;
             padding: 10px 20px; cursor: pointer; margin-top: 20px;
@@ -100,7 +98,7 @@
 
     <canvas id="gameCanvas" width="800" height="600" tabindex="0"></canvas>
 
-    <div id="versionTag">Ver 0.0.1</div>
+    <div id="versionTag">Ver 0.0.2</div>
 
     <div id="rankingUI">
         <h2>GAME OVER</h2>
@@ -121,7 +119,6 @@
     </div>
 
     <script>
-        // ★ 구글 Apps Script URL (사용자님 제공) ★
         const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzJHrZ-p5oaw2h85Fumk4KpymyV0s52p6j1tDhfpUQRz6Azhg7nJZscHbxtAcKm1wdi8w/exec"; 
 
         const canvas = document.getElementById("gameCanvas");
@@ -139,7 +136,7 @@
 
         // --- 게임 상태 ---
         const gameState = {
-            screen: 'start', // start, playing, gameover
+            screen: 'start', 
             isPaused: false,
             score: 0,
             arrests: 0,
@@ -230,7 +227,6 @@
         let roadNodes = [];
         const buildingColors = ['#8d6e63', '#78909c', '#a1887f', '#546e7a', '#6d4c41'];
 
-        // --- 유틸 함수 ---
         function getMousePos(evt) {
             const rect = canvas.getBoundingClientRect();
             const scaleX = canvas.width / rect.width;
@@ -263,7 +259,6 @@
             return robbers.filter(r => r.worldX === wx && r.worldY === wy).length;
         }
 
-        // --- 랭킹 관련 함수 ---
         function submitRanking() {
             const name = document.getElementById("userName").value.trim();
             if (!name) { alert("이름을 입력해주세요!"); return; }
@@ -337,7 +332,7 @@
             })
             .catch(err => {
                 console.warn("랭킹 로드 실패:", err);
-                leaderboardDiv.innerHTML = "<p style='text-align:center; color:#ff5555; font-size:12px;'>서버 연결 실패<br>(GitHub Pages 환경 권장)</p>";
+                leaderboardDiv.innerHTML = "<p style='text-align:center; color:#ff5555; font-size:12px;'>서버 연결 대기 중...<br>(GitHub Pages 환경 권장)</p>";
             });
         }
 
@@ -346,7 +341,6 @@
             initGame();
         }
 
-        // --- 게임 초기화 ---
         function initGame() {
             rankingUI.style.display = "none";
             gameState.score = 0;
@@ -674,8 +668,8 @@
         
         // --- 업데이트 ---
         function update() {
-            // 게임 오버 체크 및 UI 표시
             if (gameState.screen === 'gameover') {
+                // 게임 오버 상태일 때 UI가 안 보이면 띄움
                 if (rankingUI.style.display === "none" || rankingUI.style.display === "") {
                     rankingUI.style.display = "block";
                     rankForm.style.display = "block"; 
@@ -694,7 +688,7 @@
                     
                     fetchLeaderboard();
                 }
-                return; // 게임 로직 멈춤
+                return; 
             }
 
             if (gameState.screen !== 'playing') return;
@@ -827,13 +821,20 @@
             updateRobbers();
         }
 
+        // [수정] 얼음 땡 버그 수정: Freeze 상태여도 충돌 체크는 수행
         function updateRobbers() {
-            if (gameState.freezeActiveTime > 0) return;
-
             for (let i = robbers.length - 1; i >= 0; i--) {
                 const r = robbers[i];
+                
+                // 현재 월드에 있는 도둑
                 if (r.worldX === worldState.x && r.worldY === worldState.y) {
-                    moveRobberAI(r);
+                    
+                    // 1. 이동 로직: 얼지 않았을 때만 움직임
+                    if (gameState.freezeActiveTime <= 0) {
+                        moveRobberAI(r);
+                    }
+
+                    // 2. 체포 로직: 얼었든 안 얼었든 항상 체크 (버그 수정됨)
                     const dist = Math.sqrt((player.x - r.x)**2 + (player.y - r.y)**2);
                     if (dist < 30) {
                         robbers.splice(i, 1);
@@ -841,34 +842,39 @@
                         gameState.isCarrying = true;
                         showGameMessage("체포 성공! 경찰서로 압송하라!", "#2ecc71", 120);
                     }
-                } else {
-                    r.offScreenTimer++;
-                    if (r.offScreenTimer > 180) { 
-                        r.offScreenTimer = 0;
-                        if (Math.random() > 0.5) {
-                            const dx = Math.floor(Math.random()*3) - 1; 
-                            const dy = Math.floor(Math.random()*3) - 1;
-                            r.worldX = Math.max(0, Math.min(2, r.worldX + dx));
-                            r.worldY = Math.max(0, Math.min(2, r.worldY + dy));
-                            
-                            if (r.worldX === 1 && r.worldY === 1) {
-                                if (getRobberCountInStage(1, 1) >= MAX_CENTER_ROBBERS) {
-                                    r.worldX -= dx;
-                                    r.worldY -= dy;
-                                    if (dx !== 0) r.x = (dx > 0) ? canvas.width - 30 : 30;
-                                    if (dy !== 0) r.y = (dy > 0) ? canvas.height - 30 : 30;
-                                    r.targetNode = null;
-                                    continue; 
+                } 
+                // 다른 월드에 있는 도둑
+                else {
+                    // 화면 밖 이동도 얼지 않았을 때만
+                    if (gameState.freezeActiveTime <= 0) {
+                        r.offScreenTimer++;
+                        if (r.offScreenTimer > 180) { 
+                            r.offScreenTimer = 0;
+                            if (Math.random() > 0.5) {
+                                const dx = Math.floor(Math.random()*3) - 1; 
+                                const dy = Math.floor(Math.random()*3) - 1;
+                                r.worldX = Math.max(0, Math.min(2, r.worldX + dx));
+                                r.worldY = Math.max(0, Math.min(2, r.worldY + dy));
+                                
+                                if (r.worldX === 1 && r.worldY === 1) {
+                                    if (getRobberCountInStage(1, 1) >= MAX_CENTER_ROBBERS) {
+                                        r.worldX -= dx;
+                                        r.worldY -= dy;
+                                        if (dx !== 0) r.x = (dx > 0) ? canvas.width - 30 : 30;
+                                        if (dy !== 0) r.y = (dy > 0) ? canvas.height - 30 : 30;
+                                        r.targetNode = null;
+                                        continue; 
+                                    }
                                 }
-                            }
 
-                            if(r.worldX === worldState.x && r.worldY === worldState.y) {
-                                const edgeNodes = roadNodes.filter(n => n.isExit);
-                                if(edgeNodes.length > 0) {
-                                    const entry = edgeNodes[Math.floor(Math.random()*edgeNodes.length)];
-                                    r.x = entry.x; r.y = entry.y;
-                                    showGameMessage("⚠️ 도둑이 현재 구역으로 진입했습니다!", "orange", 150);
-                                } else { r.x = 0; r.y = 0; }
+                                if(r.worldX === worldState.x && r.worldY === worldState.y) {
+                                    const edgeNodes = roadNodes.filter(n => n.isExit);
+                                    if(edgeNodes.length > 0) {
+                                        const entry = edgeNodes[Math.floor(Math.random()*edgeNodes.length)];
+                                        r.x = entry.x; r.y = entry.y;
+                                        showGameMessage("⚠️ 도둑이 현재 구역으로 진입했습니다!", "orange", 150);
+                                    } else { r.x = 0; r.y = 0; }
+                                }
                             }
                         }
                     }
@@ -1000,9 +1006,10 @@
                 return;
             }
             if (gameState.screen === 'gameover') {
-                // 게임 오버 시 캔버스는 어둡게 처리만 함 (UI는 HTML이 담당)
-                ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
-                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                if (rankingUI.style.display !== "block") {
+                    ctx.fillStyle = "rgba(0, 0, 0, 0.8)";
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                }
                 return;
             }
 
@@ -1199,6 +1206,25 @@
                 ctx.fillText("위성 스캔 : M", guideX, guideY + 105);
                 ctx.fillText("일시정지 : ESC", guideX, guideY + 140);
             }
+        }
+
+        function drawGameOverScreen() {
+            ctx.fillStyle = "black";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.fillStyle = "red";
+            ctx.font = "bold 50px Malgun Gothic";
+            ctx.textAlign = "center";
+            ctx.fillText("GAME OVER", canvas.width/2, canvas.height/2 - 50);
+            
+            ctx.fillStyle = "white";
+            ctx.font = "24px Malgun Gothic";
+            ctx.fillText(`도시가 함락되었습니다! (범죄자 ${robbers.length}명)`, canvas.width/2, canvas.height/2 + 10);
+            ctx.fillText(`최종 점수: ${gameState.score}`, canvas.width/2, canvas.height/2 + 50);
+            
+            ctx.fillStyle = "#777";
+            ctx.font = "16px Malgun Gothic";
+            ctx.fillText("Click or Press SPACE to Restart", canvas.width/2, canvas.height/2 + 100);
         }
 
         function drawMapBorders() {
