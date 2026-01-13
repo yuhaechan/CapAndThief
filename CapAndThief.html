@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>경찰 과 도둑: City Defense (v0.0.1)</title>
+    <title>경찰 과 도둑: City Defense</title>
     <style>
         body {
             margin: 0;
@@ -23,87 +23,105 @@
             max-height: 100%;
             outline: none;
         }
-        /* 랭킹 UI 스타일 */
+        
+        /* 버전 정보 (우측 하단 고정, 최상위) */
+        #versionTag {
+            position: absolute;
+            bottom: 15px;
+            right: 15px;
+            color: #ffffff;
+            font-size: 14px;
+            font-weight: bold;
+            font-family: monospace;
+            pointer-events: none;
+            z-index: 9999;
+            background-color: rgba(0, 0, 0, 0.6);
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 1px solid #555;
+        }
+
+        /* 랭킹/게임오버 UI 스타일 */
         #rankingUI {
-            display: none; 
+            display: none; /* 평소엔 숨김 */
             position: absolute;
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            background: rgba(0, 0, 0, 0.9);
-            border: 2px solid #00FFFF;
-            padding: 20px;
+            background: rgba(0, 0, 0, 0.95);
+            border: 2px solid #FF0000; /* 게임오버 느낌의 빨간 테두리 */
+            padding: 30px;
             text-align: center;
             color: white;
             width: 400px;
-            border-radius: 10px;
-            z-index: 10;
-            font-family: 'Malgun Gothic', sans-serif;
+            border-radius: 15px;
+            box-shadow: 0 0 30px rgba(255, 0, 0, 0.3);
+            z-index: 5000;
         }
-        #rankingUI h2 { margin-top: 0; color: #FFD700; }
+        #rankingUI h2 { margin-top: 0; color: #FF4444; font-size: 32px; margin-bottom: 10px; }
         #rankForm input {
-            padding: 10px; font-size: 16px; width: 60%;
+            padding: 12px; font-size: 16px; width: 70%;
             background: #222; border: 1px solid #555; color: white;
-            text-align: center;
+            text-align: center; margin-bottom: 10px;
         }
         #rankForm button {
             padding: 10px 20px; font-size: 16px; cursor: pointer;
-            background: #00FFFF; border: none; font-weight: bold; color: black;
+            background: #FF4444; border: none; font-weight: bold; color: white;
+            border-radius: 5px;
         }
+        #rankForm button:hover { background: #ff0000; }
+        
         #leaderboard {
             margin-top: 20px;
-            max-height: 200px;
+            max-height: 180px;
             overflow-y: auto;
             text-align: left;
             font-size: 14px;
-            background: rgba(255,255,255,0.1);
+            background: rgba(255,255,255,0.05);
             padding: 10px;
+            border-radius: 5px;
         }
-        .rank-row { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid #444; }
+        .rank-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid #444; }
+        .rank-row:last-child { border-bottom: none; }
         .rank-row:nth-child(1) { color: gold; font-weight: bold; }
         .rank-row:nth-child(2) { color: silver; }
         .rank-row:nth-child(3) { color: #cd7f32; }
 
-        /* [신규] 버전 정보 스타일 */
-        #versionTag {
-            position: absolute;
-            bottom: 5px;
-            right: 10px;
-            color: rgba(255, 255, 255, 0.3); /* 반투명해서 거슬리지 않게 */
-            font-size: 11px; /* 너무 작으면 안 보여서 11px로 조정 */
-            font-family: monospace;
-            pointer-events: none; /* 마우스 클릭 통과 */
-            z-index: 100;
+        /* 다시하기 버튼 */
+        .restart-btn {
+            background: #444; color: white; border: 1px solid #777;
+            padding: 10px 20px; cursor: pointer; margin-top: 20px;
+            border-radius: 5px; font-weight: bold;
         }
+        .restart-btn:hover { background: #666; }
     </style>
 </head>
 <body>
 
     <canvas id="gameCanvas" width="800" height="600" tabindex="0"></canvas>
 
-    <div id="versionTag">v0.0.1</div>
+    <div id="versionTag">Ver 0.0.1</div>
 
     <div id="rankingUI">
-        <h2>🏆 GAME OVER 🏆</h2>
-        <p id="finalScore" style="font-size: 18px; color: cyan;">점수: 0</p>
+        <h2>GAME OVER</h2>
+        <p>도시가 함락되었습니다.</p>
+        <p id="finalScore" style="font-size: 20px; color: cyan; font-weight: bold; margin: 15px 0;">점수: 0</p>
         
         <div id="rankForm">
-            <p>명예의 전당에 이름을 남기세요!</p>
-            <input type="text" id="userName" placeholder="이름 (최대 8자)" maxlength="8">
-            <button onclick="submitRanking()">등록</button>
+            <input type="text" id="userName" placeholder="이름을 입력하세요 (최대 8자)" maxlength="8">
+            <br>
+            <button onclick="submitRanking()">랭킹 등록</button>
         </div>
 
         <div id="leaderboard">
             <p style="text-align:center; color:#aaa;">순위표 로딩 중...</p>
         </div>
         
-        <div style="margin-top:20px;">
-            <button onclick="restartGameFromUI()" style="background:#555; color:white; border:1px solid #777; padding: 8px 16px; cursor:pointer;">다시 하기 (Replay)</button>
-        </div>
+        <button onclick="restartGameFromUI()" class="restart-btn">다시 시작 (Replay)</button>
     </div>
 
     <script>
-        // ★★★ 여기에 구글 앱스 스크립트 URL을 붙여넣으세요! ★★★
+        // ★ 구글 Apps Script URL (사용자님 제공) ★
         const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzJHrZ-p5oaw2h85Fumk4KpymyV0s52p6j1tDhfpUQRz6Azhg7nJZscHbxtAcKm1wdi8w/exec"; 
 
         const canvas = document.getElementById("gameCanvas");
@@ -121,7 +139,7 @@
 
         // --- 게임 상태 ---
         const gameState = {
-            screen: 'start', 
+            screen: 'start', // start, playing, gameover
             isPaused: false,
             score: 0,
             arrests: 0,
@@ -169,11 +187,8 @@
                 this.worldX = wx; this.worldY = wy;
                 this.x = spawnX; this.y = spawnY; 
                 this.size = 20;
-                
-                // 속도 밸런스: 기본 속도는 계속 오르지만, 도주 속도 차이는 1.5로 고정
                 this.baseSpeed = 1.0 + difficulty; 
                 this.sprintSpeed = Math.min(5.0, this.baseSpeed + 1.5);            
-                
                 this.speed = this.baseSpeed;
                 this.color = '#c0392b';
                 this.path = [];
@@ -248,7 +263,7 @@
             return robbers.filter(r => r.worldX === wx && r.worldY === wy).length;
         }
 
-        // --- 랭킹 관련 함수 (서버 통신) ---
+        // --- 랭킹 관련 함수 ---
         function submitRanking() {
             const name = document.getElementById("userName").value.trim();
             if (!name) { alert("이름을 입력해주세요!"); return; }
@@ -259,7 +274,6 @@
 
             const timeStr = document.getElementById("finalScore").getAttribute("data-time");
 
-            // iframe을 이용한 안전한 전송 (CORS 우회)
             const iframe = document.createElement('iframe');
             iframe.style.display = 'none';
             iframe.name = 'hidden_iframe';
@@ -282,7 +296,6 @@
             document.body.appendChild(form);
             form.submit();
 
-            // 전송 후 처리 (약간의 대기 후 성공 처리)
             setTimeout(() => {
                 alert("랭킹이 등록되었습니다!");
                 document.body.removeChild(form);
@@ -295,7 +308,6 @@
         function fetchLeaderboard() {
             leaderboardDiv.innerHTML = "<p style='text-align:center;'>순위표 불러오는 중...</p>";
             
-            // AbortController로 타임아웃 처리
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 5000);
 
@@ -324,8 +336,8 @@
                 leaderboardDiv.innerHTML = html;
             })
             .catch(err => {
-                console.warn("랭킹 로드 실패 (로컬 실행 또는 서버 응답 없음):", err);
-                leaderboardDiv.innerHTML = "<p style='text-align:center; color:#777; font-size:12px;'>서버 연결 대기 중...<br>(GitHub에 올리면 보입니다)</p>";
+                console.warn("랭킹 로드 실패:", err);
+                leaderboardDiv.innerHTML = "<p style='text-align:center; color:#ff5555; font-size:12px;'>서버 연결 실패<br>(GitHub Pages 환경 권장)</p>";
             });
         }
 
@@ -334,7 +346,7 @@
             initGame();
         }
 
-        // --- 게임 초기화 및 로직 ---
+        // --- 게임 초기화 ---
         function initGame() {
             rankingUI.style.display = "none";
             gameState.score = 0;
@@ -662,11 +674,12 @@
         
         // --- 업데이트 ---
         function update() {
+            // 게임 오버 체크 및 UI 표시
             if (gameState.screen === 'gameover') {
-                if (rankingUI.style.display === "none") {
+                if (rankingUI.style.display === "none" || rankingUI.style.display === "") {
                     rankingUI.style.display = "block";
                     rankForm.style.display = "block"; 
-                    document.querySelector('#rankForm button').innerText = "등록";
+                    document.querySelector('#rankForm button').innerText = "랭킹 등록";
                     document.querySelector('#rankForm button').disabled = false;
                     
                     const gameTime = getCurrentGameTime();
@@ -676,13 +689,14 @@
                     const s = (totalSec % 60).toString().padStart(2, '0');
                     const timeStr = `${m}:${s}`;
                     
-                    document.getElementById("finalScore").innerText = `최종 점수: ${gameState.score}점 (생존: ${timeStr})`;
+                    document.getElementById("finalScore").innerText = `점수: ${gameState.score} (생존: ${timeStr})`;
                     document.getElementById("finalScore").setAttribute("data-time", timeStr);
                     
                     fetchLeaderboard();
                 }
-                return;
+                return; // 게임 로직 멈춤
             }
+
             if (gameState.screen !== 'playing') return;
             if (gameState.isPaused) return;
 
@@ -986,11 +1000,9 @@
                 return;
             }
             if (gameState.screen === 'gameover') {
-                if (rankingUI.style.display !== "block") {
-                    // 게임 오버 시 캔버스 배경만 유지 (UI는 HTML div가 처리)
-                    ctx.fillStyle = "rgba(0, 0, 0, 0.8)";
-                    ctx.fillRect(0, 0, canvas.width, canvas.height);
-                }
+                // 게임 오버 시 캔버스는 어둡게 처리만 함 (UI는 HTML이 담당)
+                ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
                 return;
             }
 
@@ -1189,25 +1201,6 @@
             }
         }
 
-        function drawGameOverScreen() {
-            ctx.fillStyle = "black";
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
-            ctx.fillStyle = "red";
-            ctx.font = "bold 50px Malgun Gothic";
-            ctx.textAlign = "center";
-            ctx.fillText("GAME OVER", canvas.width/2, canvas.height/2 - 50);
-            
-            ctx.fillStyle = "white";
-            ctx.font = "24px Malgun Gothic";
-            ctx.fillText(`도시가 함락되었습니다! (범죄자 ${robbers.length}명)`, canvas.width/2, canvas.height/2 + 10);
-            ctx.fillText(`최종 점수: ${gameState.score}`, canvas.width/2, canvas.height/2 + 50);
-            
-            ctx.fillStyle = "#777";
-            ctx.font = "16px Malgun Gothic";
-            ctx.fillText("Click or Press SPACE to Restart", canvas.width/2, canvas.height/2 + 100);
-        }
-
         function drawMapBorders() {
             ctx.fillStyle = "#050505"; 
 
@@ -1276,7 +1269,8 @@
         }
 
         function drawUI() {
-            let startY = 50;
+            // [수정] 메시지 배경 추가 및 UI 위치 조정
+            let startY = 50; 
             gameState.messages.forEach((msg, index) => {
                 ctx.font = "bold 15px Malgun Gothic";
                 const textW = ctx.measureText(msg.text).width;
@@ -1361,6 +1355,7 @@
             });
 
             robbers.forEach(r => {
+                // [수정] 범인을 데리고 있어도 M키를 누르면 보이도록 조건 변경
                 if(gameState.intelObtained) {
                     const rx = mmX + r.worldX*cell + (r.x/canvas.width*cell);
                     const ry = mmY + r.worldY*cell + (r.y/canvas.height*cell);
