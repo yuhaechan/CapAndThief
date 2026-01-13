@@ -121,6 +121,9 @@
     </div>
 
     <script>
+
+        let topPlayerName = "로딩 중...";
+
         // ★ 구글 Apps Script URL (사용자님 제공) ★
         const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzJHrZ-p5oaw2h85Fumk4KpymyV0s52p6j1tDhfpUQRz6Azhg7nJZscHbxtAcKm1wdi8w/exec"; 
 
@@ -1408,21 +1411,35 @@
 
         function drawStartScreen() {
             ctx.fillStyle = "#111"; ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = "cyan"; ctx.font = "bold 60px 'Malgun Gothic'"; ctx.textAlign = "center"; ctx.fillText("경찰 과 도둑", canvas.width/2, 180);
-            ctx.fillStyle = "#FFD700"; ctx.font = "bold 24px 'Malgun Gothic'"; ctx.fillText("=== 목 표 ===", canvas.width/2, 260);
-            ctx.fillStyle = "white"; ctx.font = "20px 'Malgun Gothic'"; ctx.fillText("도둑을 추격하여 체포한 뒤,", canvas.width/2, 300); ctx.fillText("경찰서로 이송하여 점수를 획득하세요.", canvas.width/2, 330);
-            
-            const btnX = canvas.width/2 - 100; const btnY = 500;
-            
-            if (gameState.isHoveringBtn) {
-                ctx.fillStyle = "#27ae60"; canvas.style.cursor = "pointer";
-            } else {
-                ctx.fillStyle = "#28a745"; canvas.style.cursor = "default";
-            }
-            
+            ctx.fillStyle = "cyan"; ctx.font = "bold 60px 'Malgun Gothic'"; ctx.textAlign = "center"; 
+            ctx.fillText("경찰 과 도둑", 400, 180);
+    
+            ctx.fillStyle = "#FFD700"; ctx.font = "bold 24px 'Malgun Gothic'"; 
+            ctx.fillText("=== 목 표 ===", 400, 260);
+    
+            ctx.fillStyle = "white"; ctx.font = "20px 'Malgun Gothic'"; 
+            ctx.fillText("도둑을 추격하여 체포한 뒤,", 400, 300); 
+            ctx.fillText("경찰서로 이송하여 점수를 획득하세요.", 400, 330);
+
+           // drawStartScreen 함수 내부의 적절한 위치에 삽입
+            ctx.fillStyle = "rgba(255, 215, 0, 0.9)"; // 황금색
+            ctx.font = "bold 22px 'Malgun Gothic'";
+            ctx.textAlign = "center";
+
+            // 그림자 효과를 주어 1등의 위엄을 강조합니다.
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = "gold";
+            ctx.fillText(`🏆 현재 1등: ${topPlayerName}`, 400, 415);
+            ctx.shadowBlur = 0; // 초기화
+    
+            const btnX = 300; const btnY = 500;
+            if (gameState.isHoveringBtn) { ctx.fillStyle = "#27ae60"; canvas.style.cursor = "pointer"; } 
+            else { ctx.fillStyle = "#28a745"; canvas.style.cursor = "default"; }
+    
             ctx.fillRect(btnX, btnY, 200, 60);
             ctx.lineWidth = 3; ctx.strokeStyle = "white"; ctx.strokeRect(btnX, btnY, 200, 60);
-            ctx.fillStyle = "white"; ctx.font = "bold 24px 'Malgun Gothic'"; ctx.fillText("게임 시작", canvas.width/2, btnY+38);
+            ctx.fillStyle = "white"; ctx.font = "bold 24px 'Malgun Gothic'"; 
+            ctx.fillText("게임 시작", 400, btnY+38);
             
             ctx.textAlign = "right";
             ctx.font = "14px Malgun Gothic";
@@ -1506,6 +1523,29 @@
             }
             requestAnimationFrame(loop);
         }
+
+        // 시작 시 1등 정보를 가져오는 함수
+        function fetchTopRanker() {
+            fetch(SCRIPT_URL)
+            .then(res => res.json())
+            .then(data => {
+                // data가 배열이고, 첫 번째 항목이 존재하는지 확인
+                if (Array.isArray(data) && data.length > 0) {
+                    // 이름과 점수를 같이 보여주면 더 멋집니다.
+                    topPlayerName = `${data[0][0]} (${data[0][1]}점)`;
+                } else {
+                    // 데이터가 아예 없는 경우
+                    topPlayerName = "없음";
+                }
+            })
+            .catch(err => {
+                console.error("1등 정보 로드 실패:", err);
+                topPlayerName = "정보 없음";
+            });
+        }
+
+        fetchTopRanker(); // 즉시 실행
+
         loop();
 
     </script>
