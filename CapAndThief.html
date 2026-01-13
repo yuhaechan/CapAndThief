@@ -307,25 +307,45 @@
 
         function fetchLeaderboard() {
             leaderboardDiv.innerHTML = "<p style='text-align:center;'>순위표 불러오는 중...</p>";
-    
-            // 타임아웃 시간을 5초에서 10초로 늘려 안정성 확보
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000); 
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
 
             fetch(SCRIPT_URL, { signal: controller.signal })
-            .then(res => {
-                if (!res.ok) throw new Error('네트워크 응답 에러');
-                return res.json();
-            })
+            .then(res => res.json())
             .then(data => {
                 clearTimeout(timeoutId);
                 let html = "";
+        
+                // --- TOP 10 체크 로직 추가 ---
+                const currentScore = gameState.score;
+                let isTop10 = false;
+
+                if (data.length < 10) {
+                    // 등록된 데이터가 10개 미만이면 무조건 진입
+                    isTop10 = true;
+                } else {
+                    // 10위 점수(data[9][1])와 내 점수 비교
+                    const tenthScore = Number(data[9][1]);
+                    if (currentScore > tenthScore) isTop10 = true;
+                }
+
+                // UI 제어: TOP 10에 못 들면 입력창 숨기기
+                if (isTop10 && gameState.screen === 'gameover') {
+                    rankForm.style.display = "block";
+                    showGameMessage("🏆 TOP 10 기록 달성!", "gold", 200);
+                } else {
+                    rankForm.style.display = "none";
+                    // 랭킹 미진입 안내 문구 추가 (선택 사항)
+                    html += `<p style="color:#ffcc00; font-size:14px; text-align:center; margin-bottom:10px;">TOP 10 진입 실패 (다음 기회에!)</p>`;
+                }
+                // ----------------------------
+
                 if (!data || data.length === 0) {
-                    html = "<p style='text-align:center;'>등록된 랭킹이 없습니다.</p>";
+                    html += "<p style='text-align:center;'>등록된 랭킹이 없습니다.</p>";
                 } else {
                     data.forEach((row, index) => {
+                        if (index >= 10) return; // 상위 10개만 표시
                         let medal = index === 0 ? "🥇" : index === 1 ? "🥈" : index === 2 ? "🥉" : `${index + 1}.`;
-                        // [이름(50%), 점수(25%), 시간(25%)] 레이아웃 적용
                         html += `<div class="rank-row" style="display: flex; justify-content: space-between; align-items: center; white-space: nowrap; padding: 6px 0; border-bottom: 1px solid #444;">
                             <span style="width:50%; text-align:left; overflow:hidden; text-overflow:ellipsis;">${medal} ${row[0]}</span>
                             <span style="width:25%; text-align:right;">${row[1]}점</span>
@@ -337,15 +357,8 @@
             })
             .catch(err => {
                 clearTimeout(timeoutId);
-                if (err.name === 'AbortError') {
-                    console.warn("요청 시간 초과: 서버 응답이 느립니다.");
-                    leaderboardDiv.innerHTML = "<p style='text-align:center; color:#ffcc00; font-size:12px;'>서버 응답 지연 중...<br>잠시 후 다시 시도됩니다.</p>";
-                    // 응답이 너무 느리면 3초 후 한 번 더 시도
-                    setTimeout(fetchLeaderboard, 3000);
-                } else {
-                    console.error("랭킹 로드 실패:", err);
-                    leaderboardDiv.innerHTML = "<p style='text-align:center; color:#ff5555; font-size:12px;'>서버 연결 실패</p>";
-                }
+                console.error("랭킹 로드 실패:", err);
+                leaderboardDiv.innerHTML = "<p style='text-align:center; color:#ff5555; font-size:12px;'>서버 연결 실패</p>";
             });
         }
 
