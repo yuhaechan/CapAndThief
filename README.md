@@ -94,3 +94,11 @@ ESC: 일시정지 (조작 가이드 표시)
 이동: 화면 끝으로 이동하면 인접한 구역으로 화면이 전환됩니다.
 
 미니맵: 우측 상단에 현재 위치, 적(빨강), 아이템(하늘/주황), 경찰서(파랑)를 실시간으로 표시합니다.
+
+---------------------- 사운드 출처 ----------------------
+
+freeze01.mp3 - [ https://pixabay.com/ko/sound-effects/%ec%82%ac%eb%9e%8c%eb%93%a4-freeze-2-86991/ ]
+radio.mp3 - [ https://pixabay.com/ko/sound-effects/%ec%98%81%ed%99%94-%eb%b0%8f-%ed%8a%b9%ec%88%98-%ed%9a%a8%ea%b3%bc-radio-338296/ ]
+policesound- [ https://pgtd.tistory.com/271 ]
+
+---------------------------------------------------------

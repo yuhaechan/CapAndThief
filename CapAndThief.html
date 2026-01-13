@@ -124,6 +124,27 @@
 
         let topPlayerName = "로딩 중...";
 
+        // 오디오 객체 생성 (반복 재생 설정)
+        const sirenSound = new Audio('policesound.mp3'); 
+        const scanSound = new Audio('radio.mp3');
+        const freezeSound = new Audio('freeze01.mp3');
+
+        sirenSound.loop = true; // 무한 반복
+        sirenSound.volume = 0.1; // 소리를 작게 설정 (0.0 ~ 1.0)
+        scanSound.volume = 0.2;
+
+        // 사운드 설정 상태 (기본값 ON)
+        let isSoundOn = true;
+ 
+        function toggleSound() {
+            isSoundOn = !isSoundOn;
+            if (!isSoundOn) {
+                sirenSound.pause(); // 끄면 즉시 멈춤
+            } else if (gameState.screen === 'playing') {
+                sirenSound.play(); // 켜졌고 게임 중이라면 재생
+        }
+    }
+
         // ★ 구글 Apps Script URL (사용자님 제공) ★
         const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzJHrZ-p5oaw2h85Fumk4KpymyV0s52p6j1tDhfpUQRz6Azhg7nJZscHbxtAcKm1wdi8w/exec"; 
 
@@ -759,6 +780,10 @@
                         if (item.type === 'FREEZE') {
                             gameState.freezeActiveTime = gameState.maxFreezeTime;
                             showGameMessage("❄️ TIME FREEZE! (10초)", "cyan", 300);
+                            if (isSoundOn) {
+                                freezeSound.currentTime = 0;
+                                freezeSound.play();
+                            }
                         } else if (item.type === 'SLOW_AURA') {
                             gameState.slowAuraActiveTime = gameState.maxSlowAuraTime; 
                             showGameMessage("🚧 SLOW AURA! (30초)", "orange", 300);
@@ -1224,6 +1249,15 @@
                 ctx.fillText("부스트 : Shift (스태미나 소모)", guideX, guideY + 70);
                 ctx.fillText("위성 스캔 : M", guideX, guideY + 105);
                 ctx.fillText("일시정지 : ESC", guideX, guideY + 140);
+
+                // 사운드 버튼 코드를 추가합니다!
+                const sBtnX = canvas.width/4 - 30; // PAUSED 글자 아래쪽 적당한 위치
+                const sBtnY = canvas.height/2 + 80;
+                ctx.fillStyle = isSoundOn ? "#28a745" : "#dc3545";
+                ctx.fillRect(sBtnX, sBtnY, 60, 30);
+                ctx.fillStyle = "white";
+                ctx.font = "bold 14px Malgun Gothic";
+                ctx.fillText(isSoundOn ? "🔊 ON" : "🔈 OFF", sBtnX + 30, sBtnY + 20);
             }
         }
 
@@ -1446,27 +1480,59 @@
             ctx.fillStyle = "#7f8c8d";
             ctx.fillText("이동: WASD / 부스트: Shift / 스캔: M / 일시정지: ESC", canvas.width - 20, canvas.height - 20);
             ctx.textAlign = "center"; 
+
+            const soundBtnX = 720, soundBtnY = 20; // 우측 상단 배치
+            ctx.fillStyle = isSoundOn ? "#28a745" : "#dc3545"; // ON은 녹색, OFF는 빨간색
+            ctx.fillRect(soundBtnX, soundBtnY, 60, 30);
+            ctx.fillStyle = "white";
+            ctx.font = "bold 14px Arial";
+            ctx.fillText(isSoundOn ? "🔊 ON" : "🔈 OFF", soundBtnX + 30, soundBtnY + 20);
         }
 
         canvas.addEventListener('click', (e) => {
             const pos = getMousePos(e);
-            
-            if (gameState.screen === 'start' || gameState.screen === 'gameover') {
-                const btnX = canvas.width/2 - 100; const btnY = 500;
-                if (gameState.screen === 'gameover') {
-                    // 게임오버 시에는 버튼 클릭으로만 재시작 유도 (실수 방지)
-                } else if (pos.x >= btnX && pos.x <= btnX+200 && pos.y >= btnY && pos.y <= btnY+60) {
+
+            // 1. 시작 화면 처리
+            if (gameState.screen === 'start') {
+                const btnX = canvas.width / 2 - 100;
+                const btnY = 500;
+        
+                // [게임 시작 버튼] 클릭
+                if (pos.x >= btnX && pos.x <= btnX + 200 && pos.y >= btnY && pos.y <= btnY + 60) {
                     initGame();
+                    if (isSoundOn) {
+                        sirenSound.currentTime = 0; // 처음부터 재생
+                        sirenSound.play().catch(err => console.log("재생 실패:", err));
+                    }
+                }
+
+                // [사운드 ON/OFF 버튼] 클릭 (우측 상단)
+                if (pos.x >= 720 && pos.x <= 780 && pos.y >= 20 && pos.y <= 50) {
+                    toggleSound();
                 }
             } 
+            // 2. 게임 중(playing)이면서 일시정지(isPaused) 상태일 때 처리
             else if (gameState.screen === 'playing' && gameState.isPaused) {
+                // [사운드 ON/OFF 버튼] 클릭 (중앙 아래쪽)
+                const sBtnX = canvas.width / 4 - 30;
+                const sBtnY = canvas.height / 2 + 80;
+                if (pos.x >= sBtnX && pos.x <= sBtnX + 60 && pos.y >= sBtnY && pos.y <= sBtnY + 30) {
+                    toggleSound();
+                }
+
+                // [메인메뉴로 나가기 버튼] 클릭
                 const btnW = 200; const btnH = 50;
-                const btnX = canvas.width/4 - btnW/2;
-                const btnY = canvas.height/2 + 20;
-                if (pos.x >= btnX && pos.x <= btnX+btnW && pos.y >= btnY && pos.y <= btnY+btnH) {
-                    gameState.screen = 'start'; 
+                const btnX = canvas.width / 4 - btnW / 2;
+                const btnY = canvas.height / 2 + 20;
+                if (pos.x >= btnX && pos.x <= btnX + btnW && pos.y >= btnY && pos.y <= btnY + btnH) {
+                    gameState.screen = 'start';
+                    sirenSound.pause(); // 나가면 소리 끔
                     canvas.style.cursor = "default";
                 }
+            }
+            // 3. 게임 오버 화면 클릭 처리 (필요시 추가)
+            else if (gameState.screen === 'gameover') {
+                // 게임오버 시의 버튼 클릭 로직이 있다면 여기에...
             }
         });
 
@@ -1485,33 +1551,34 @@
         });
 
         window.addEventListener('keydown', e => {
-            if (e.code === 'KeyM') {
-                gameState.intelObtained = true;
-                showGameMessage("📡 위성 스캔: 도둑 위치 수신됨", "#00FFFF", 200);
-            }
             if (e.code === 'Escape') {
                 if (gameState.screen === 'playing') {
                     gameState.isPaused = !gameState.isPaused;
                     if (gameState.isPaused) {
+                        sirenSound.pause(); // 일시정지 시 소리도 멈춤
                         gameState.pauseStartTime = Date.now();
                     } else {
+                        if (isSoundOn) sirenSound.play(); // 재개 시 소리 다시 재생
                         gameState.totalPausedTime += (Date.now() - gameState.pauseStartTime);
                     }
                 }
             }
-            // ★ 스페이스바 기능 제거됨 ★
+
+            if (e.code === 'KeyM') {
+                gameState.intelObtained = true;
+                if (isSoundOn) {
+                    scanSound.currentTime = 0; // 연속 클릭 시에도 소리가 끊기지 않게 초기화
+                    scanSound.play();
+                }
+                showGameMessage("📡 위성 스캔: 도둑 위치 수신됨", "#00FFFF", 200);
+            }
+
+            // 이동키 조작
             if (e.key === 'w' || e.key === 'W') keys.w = true;
             if (e.key === 'a' || e.key === 'A') keys.a = true;
             if (e.key === 's' || e.key === 'S') keys.s = true;
             if (e.key === 'd' || e.key === 'D') keys.d = true;
             if (e.key === 'Shift') keys.shift = true;
-        });
-        window.addEventListener('keyup', e => {
-            if (e.key === 'w' || e.key === 'W') keys.w = false;
-            if (e.key === 'a' || e.key === 'A') keys.a = false;
-            if (e.key === 's' || e.key === 'S') keys.s = false;
-            if (e.key === 'd' || e.key === 'D') keys.d = false;
-            if (e.key === 'Shift') keys.shift = false;
         });
 
         function loop() {
