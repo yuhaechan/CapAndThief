@@ -1,8 +1,8 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>경찰 과 도둑: City Defense - Ranked</title>
+    <title>경찰 과 도둑: City Defense (v0.0.1)</title>
     <style>
         body {
             margin: 0;
@@ -63,11 +63,25 @@
         .rank-row:nth-child(1) { color: gold; font-weight: bold; }
         .rank-row:nth-child(2) { color: silver; }
         .rank-row:nth-child(3) { color: #cd7f32; }
+
+        /* [신규] 버전 정보 스타일 */
+        #versionTag {
+            position: absolute;
+            bottom: 5px;
+            right: 10px;
+            color: rgba(255, 255, 255, 0.3); /* 반투명해서 거슬리지 않게 */
+            font-size: 11px; /* 너무 작으면 안 보여서 11px로 조정 */
+            font-family: monospace;
+            pointer-events: none; /* 마우스 클릭 통과 */
+            z-index: 100;
+        }
     </style>
 </head>
 <body>
 
     <canvas id="gameCanvas" width="800" height="600" tabindex="0"></canvas>
+
+    <div id="versionTag">v0.0.1</div>
 
     <div id="rankingUI">
         <h2>🏆 GAME OVER 🏆</h2>
@@ -155,8 +169,11 @@
                 this.worldX = wx; this.worldY = wy;
                 this.x = spawnX; this.y = spawnY; 
                 this.size = 20;
+                
+                // 속도 밸런스: 기본 속도는 계속 오르지만, 도주 속도 차이는 1.5로 고정
                 this.baseSpeed = 1.0 + difficulty; 
                 this.sprintSpeed = Math.min(5.0, this.baseSpeed + 1.5);            
+                
                 this.speed = this.baseSpeed;
                 this.color = '#c0392b';
                 this.path = [];
@@ -278,9 +295,14 @@
         function fetchLeaderboard() {
             leaderboardDiv.innerHTML = "<p style='text-align:center;'>순위표 불러오는 중...</p>";
             
-            fetch(SCRIPT_URL)
+            // AbortController로 타임아웃 처리
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+            fetch(SCRIPT_URL, { signal: controller.signal })
             .then(res => res.json())
             .then(data => {
+                clearTimeout(timeoutId);
                 let html = "";
                 if (!data || data.length === 0) {
                     html = "<p style='text-align:center;'>등록된 랭킹이 없습니다.</p>";
@@ -302,8 +324,8 @@
                 leaderboardDiv.innerHTML = html;
             })
             .catch(err => {
-                console.error(err);
-                leaderboardDiv.innerHTML = "<p style='text-align:center; color:red;'>랭킹 로드 실패<br>(URL을 확인하세요)</p>";
+                console.warn("랭킹 로드 실패 (로컬 실행 또는 서버 응답 없음):", err);
+                leaderboardDiv.innerHTML = "<p style='text-align:center; color:#777; font-size:12px;'>서버 연결 대기 중...<br>(GitHub에 올리면 보입니다)</p>";
             });
         }
 
@@ -1165,6 +1187,25 @@
                 ctx.fillText("위성 스캔 : M", guideX, guideY + 105);
                 ctx.fillText("일시정지 : ESC", guideX, guideY + 140);
             }
+        }
+
+        function drawGameOverScreen() {
+            ctx.fillStyle = "black";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.fillStyle = "red";
+            ctx.font = "bold 50px Malgun Gothic";
+            ctx.textAlign = "center";
+            ctx.fillText("GAME OVER", canvas.width/2, canvas.height/2 - 50);
+            
+            ctx.fillStyle = "white";
+            ctx.font = "24px Malgun Gothic";
+            ctx.fillText(`도시가 함락되었습니다! (범죄자 ${robbers.length}명)`, canvas.width/2, canvas.height/2 + 10);
+            ctx.fillText(`최종 점수: ${gameState.score}`, canvas.width/2, canvas.height/2 + 50);
+            
+            ctx.fillStyle = "#777";
+            ctx.font = "16px Malgun Gothic";
+            ctx.fillText("Click or Press SPACE to Restart", canvas.width/2, canvas.height/2 + 100);
         }
 
         function drawMapBorders() {
